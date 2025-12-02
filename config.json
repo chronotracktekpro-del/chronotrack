@@ -1,0 +1,39 @@
+{
+    "empleados": [],
+    "codigos_barras": {},
+    "admin": {
+        "password": "admin123",
+        "max_attempts": 3,
+        "lockout_time": 300
+    },
+    "horarios_laborales": {
+        "lunes_a_jueves": {
+            "hora_entrada": "07:00",
+            "hora_salida": "16:30",
+            "horas_normales": 9.5,
+            "tolerancia_entrada": 15,
+            "tolerancia_salida": 15
+        },
+        "viernes": {
+            "hora_entrada": "07:00",
+            "hora_salida": "15:30",
+            "horas_normales": 8.5,
+            "tolerancia_entrada": 15,
+            "tolerancia_salida": 15
+        },
+        "sabado": {
+            "hora_entrada": "07:00",
+            "hora_salida": "12:00",
+            "horas_normales": 5,
+            "tolerancia_entrada": 15,
+            "tolerancia_salida": 15
+        }
+    },
+    "google_sheets": {
+        "enabled": true,
+        "spreadsheet_id": "1r3M71nQK_SxVFycYvmoeDek9KVKfBjFZuPax-v5oIb0",
+        "worksheet_empleados": "Datos_colab",
+        "worksheet_servicios": "Servicio",
+        "credentials_file": "credentials.json"
+    }
+}
