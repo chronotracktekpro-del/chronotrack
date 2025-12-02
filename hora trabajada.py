@@ -1,4 +1,4 @@
-import streamlit as st
+ import streamlit as st
 import streamlit.components.v1 as components
 import pandas as pd
 from datetime import datetime, time, date
@@ -1765,16 +1765,133 @@ def mostrar_paso_cedula():
     </div>
     """, unsafe_allow_html=True)
     
-    # Campo optimizado para lectores USB
-    st.markdown('<div class="barcode-scanner-field">', unsafe_allow_html=True)
-    codigo_barras = st.text_input(
-        "🔍 Código de barras:",
-        placeholder="● ● ● Campo listo para escanear ● ● ●",
-        key="codigo_input",
-        help="✅ Optimizado para lectores USB\n🔍 El código aparecerá automáticamente\n⚡ Procesamiento instantáneo",
-        label_visibility="collapsed"
-    )
-    st.markdown('</div>', unsafe_allow_html=True)
+    # Detectar si es un dispositivo móvil y mostrar opción de cámara
+    st.markdown("""
+    <script>
+    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+    if (isMobile) {
+        window.parent.postMessage({type: 'streamlit:setComponentValue', value: true}, '*');
+    }
+    </script>
+    """, unsafe_allow_html=True)
+    
+    # Botón para abrir cámara en móviles
+    col1, col2 = st.columns([1, 1])
+    
+    with col1:
+        if st.button("📷 Escanear con Cámara", use_container_width=True, type="primary"):
+            st.session_state['mostrar_camara'] = True
+    
+    with col2:
+        if st.button("⌨️ Ingresar Manual", use_container_width=True):
+            st.session_state['mostrar_camara'] = False
+    
+    # Inicializar estado
+    if 'mostrar_camara' not in st.session_state:
+        st.session_state['mostrar_camara'] = False
+    
+    codigo_barras = None
+    
+    # Mostrar interfaz de cámara o campo de texto según la selección
+    if st.session_state.get('mostrar_camara', False):
+        st.markdown("""
+        <div style='background: linear-gradient(135deg, #3EAEA5 0%, #5BC4BC 100%); padding: 20px; border-radius: 15px; margin: 20px 0;'>
+            <h3 style='color: white; text-align: center; margin-bottom: 15px;'>📷 Escáner de Código de Barras</h3>
+            <p style='color: white; text-align: center;'>Coloca el código de barras frente a la cámara</p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Componente HTML5 para acceso a cámara y escaneo de códigos de barras
+        components.html("""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <script src="https://unpkg.com/@zxing/library@latest"></script>
+            <style>
+                body { margin: 0; padding: 20px; background: #f0f2f6; font-family: Arial, sans-serif; }
+                #video-container { position: relative; max-width: 100%; margin: 0 auto; }
+                #video { width: 100%; max-height: 400px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+                #result { 
+                    margin-top: 20px; 
+                    padding: 15px; 
+                    background: #28a745; 
+                    color: white; 
+                    border-radius: 10px; 
+                    font-size: 18px;
+                    text-align: center;
+                    display: none;
+                }
+                #loading { text-align: center; color: #666; padding: 20px; }
+                .error { background: #dc3545 !important; }
+            </style>
+        </head>
+        <body>
+            <div id="loading">Iniciando cámara...</div>
+            <div id="video-container" style="display:none;">
+                <video id="video" playsinline></video>
+            </div>
+            <div id="result"></div>
+            
+            <script>
+                const codeReader = new ZXing.BrowserMultiFormatReader();
+                const videoElement = document.getElementById('video');
+                const resultElement = document.getElementById('result');
+                const loadingElement = document.getElementById('loading');
+                const videoContainer = document.getElementById('video-container');
+                
+                // Iniciar escaneo
+                codeReader.decodeFromVideoDevice(null, videoElement, (result, err) => {
+                    if (result) {
+                        const codigo = result.text;
+                        resultElement.textContent = '✅ Código detectado: ' + codigo;
+                        resultElement.style.display = 'block';
+                        resultElement.classList.remove('error');
+                        
+                        // Enviar código a Streamlit
+                        window.parent.postMessage({
+                            type: 'streamlit:setComponentValue',
+                            value: codigo
+                        }, '*');
+                        
+                        // Detener escaneo después de detectar
+                        setTimeout(() => {
+                            codeReader.reset();
+                        }, 2000);
+                    }
+                    
+                    if (err && !(err instanceof ZXing.NotFoundException)) {
+                        console.error(err);
+                    }
+                }).then(() => {
+                    loadingElement.style.display = 'none';
+                    videoContainer.style.display = 'block';
+                }).catch(err => {
+                    loadingElement.textContent = '❌ Error al acceder a la cámara. Por favor, da permisos de cámara.';
+                    loadingElement.style.color = '#dc3545';
+                    console.error(err);
+                });
+            </script>
+        </body>
+        </html>
+        """, height=550)
+        
+        # Campo oculto para recibir el código escaneado
+        codigo_barras = st.text_input(
+            "Código escaneado:",
+            key="codigo_camara",
+            label_visibility="collapsed"
+        )
+    else:
+        # Campo optimizado para lectores USB
+        st.markdown('<div class="barcode-scanner-field">', unsafe_allow_html=True)
+        codigo_barras = st.text_input(
+            "🔍 Código de barras:",
+            placeholder="● ● ● Campo listo para escanear ● ● ●",
+            key="codigo_input",
+            help="✅ Optimizado para lectores USB\n🔍 El código aparecerá automáticamente\n⚡ Procesamiento instantáneo",
+            label_visibility="collapsed"
+        )
+        st.markdown('</div>', unsafe_allow_html=True)
     
     # Auto-enfoque para escáner
     components.html("""
