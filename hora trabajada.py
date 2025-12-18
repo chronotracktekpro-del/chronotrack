@@ -392,9 +392,11 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Configuración de archivos
-DATA_FILE = 'horas_trabajadas.csv'
-CONFIG_FILE = 'config.json'
+# Configuración de archivos - Usar rutas absolutas basadas en la ubicación del script
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_FILE = os.path.join(SCRIPT_DIR, 'horas_trabajadas.csv')
+CONFIG_FILE = os.path.join(SCRIPT_DIR, 'config.json')
+CREDENTIALS_FILE = os.path.join(SCRIPT_DIR, 'credentials.json')
 
 # Inicializar session state
 if 'screen' not in st.session_state:
@@ -896,9 +898,14 @@ def diagnosticar_conexion_sheets():
     
     # Verificar archivo de credenciales
     credentials_file = gs_config.get('credentials_file', '')
+    
+    # Si la ruta es relativa, convertir a absoluta
+    if credentials_file and not os.path.isabs(credentials_file):
+        credentials_file = os.path.join(SCRIPT_DIR, credentials_file)
+    
+    # Si no hay archivo en config, usar el predeterminado
     if not credentials_file:
-        diagnosticos.append("❌ Archivo de credenciales no especificado en config.json")
-        return diagnosticos
+        credentials_file = CREDENTIALS_FILE
     
     if not os.path.exists(credentials_file):
         diagnosticos.append(f"❌ Archivo de credenciales no encontrado: {credentials_file}")
@@ -956,16 +963,12 @@ def diagnosticar_conexion_sheets():
     return diagnosticos
 
 def conectar_google_sheets():
-    """Conectar a Google Sheets usando las credenciales configuradas"""
+    """Conectar a Google Sheets usando las credenciales configuradas (local o Streamlit Cloud)"""
     config = load_config()
     gs_config = config.get('google_sheets', {})
     
     if not gs_config.get('enabled', False):
         return None, "Google Sheets no está habilitado"
-    
-    credentials_file = gs_config.get('credentials_file', '')
-    if not credentials_file or not os.path.exists(credentials_file):
-        return None, "Archivo de credenciales no encontrado"
     
     try:
         scope = [
@@ -973,7 +976,34 @@ def conectar_google_sheets():
             'https://www.googleapis.com/auth/drive'
         ]
         
-        credentials = Credentials.from_service_account_file(credentials_file, scopes=scope)
+        credentials = None
+        
+        # OPCIÓN 1: Intentar usar Streamlit Secrets (para Streamlit Cloud)
+        try:
+            if hasattr(st, 'secrets') and 'gcp_service_account' in st.secrets:
+                from google.oauth2.service_account import Credentials
+                credentials_dict = dict(st.secrets["gcp_service_account"])
+                credentials = Credentials.from_service_account_info(credentials_dict, scopes=scope)
+        except Exception as e:
+            pass  # Si falla, intentar con archivo local
+        
+        # OPCIÓN 2: Usar archivo local credentials.json
+        if credentials is None:
+            credentials_file = gs_config.get('credentials_file', '')
+            
+            # Si la ruta es relativa, convertir a absoluta
+            if credentials_file and not os.path.isabs(credentials_file):
+                credentials_file = os.path.join(SCRIPT_DIR, credentials_file)
+            
+            # Si no hay archivo en config, usar el predeterminado
+            if not credentials_file:
+                credentials_file = CREDENTIALS_FILE
+            
+            if not os.path.exists(credentials_file):
+                return None, f"Archivo de credenciales no encontrado: {credentials_file}"
+            
+            credentials = Credentials.from_service_account_file(credentials_file, scopes=scope)
+        
         gc = gspread.authorize(credentials)
         
         spreadsheet_id = gs_config.get('spreadsheet_id', '')
@@ -4031,4 +4061,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
