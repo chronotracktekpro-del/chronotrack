@@ -1,12 +1,28 @@
 import streamlit as st
 import streamlit.components.v1 as components
 import pandas as pd
-from datetime import datetime, time, date
+from datetime import datetime, time, date, timedelta, timezone
 import calendar
 import os
 import json
 import gspread
 from google.oauth2.service_account import Credentials
+
+# Zona horaria de Colombia (UTC-5)
+COLOMBIA_UTC_OFFSET = timedelta(hours=-5)
+COLOMBIA_TZ = timezone(COLOMBIA_UTC_OFFSET)
+
+def obtener_hora_colombia():
+    """Obtener la hora actual en zona horaria de Colombia (UTC-5)"""
+    return datetime.now(COLOMBIA_TZ)
+
+def obtener_hora_colombia_time():
+    """Obtener solo el objeto time en zona horaria de Colombia"""
+    return obtener_hora_colombia().time()
+
+def obtener_fecha_colombia():
+    """Obtener la fecha actual en zona horaria de Colombia"""
+    return obtener_hora_colombia().date()
 
 # Configuración de la página
 st.set_page_config(
@@ -761,7 +777,7 @@ def calcular_horas_conteo_diario(empleado_cedula, fecha_registro, hora_registro)
     - Si ya hay registros del día: calcula desde la última hora_exacta del día
     """
     hora_inicio_dia = time(7, 0)  # 7:00 AM por defecto
-    hora_actual_exacta = datetime.now().time()  # Hora exacta actual
+    hora_actual_exacta = obtener_hora_colombia_time()  # Hora exacta actual en Colombia
     cedula_str = str(empleado_cedula).strip()
     
     print(f"\n{'='*60}")
@@ -1551,8 +1567,8 @@ def obtener_ultimo_registro_por_cedula(cedula, fecha_actual, df):
 def registrar_actividad_continua(empleado, codigo_barras, servicio_info=None):
     """Registrar actividad continua desde las 7:00 AM o último registro"""
     df = load_data()
-    fecha_actual = date.today()
-    hora_actual = datetime.now().time()
+    fecha_actual = obtener_fecha_colombia()
+    hora_actual = obtener_hora_colombia_time()
     
     # Obtener el último registro del día
     ultimo_registro = obtener_ultimo_registro_del_dia(empleado, fecha_actual, df)
@@ -2032,7 +2048,7 @@ def mostrar_paso_cedula():
                     
                     # Calcular diferencia entre hora actual y hora_exacta anterior
                     try:
-                        hora_actual = datetime.now()
+                        hora_actual = obtener_hora_colombia()
                         # Parsear hora_exacta anterior (formato esperado: HH:MM:SS)
                         if ':' in hora_exacta_anterior:
                             partes = hora_exacta_anterior.split(':')
@@ -2092,15 +2108,15 @@ def mostrar_paso_cedula():
                     df_actual = load_data()
                     registros_hoy = df_actual[
                         (df_actual['empleado'] == empleado) & 
-                        (df_actual['fecha'] == date.today())
+                        (df_actual['fecha'] == obtener_fecha_colombia())
                     ]
                     
                     actividad_html = f"""
                     <div class='{mensaje_class}'>
                         <strong>{estado_texto}</strong><br>
                         Empleado: {empleado}<br>
-                        Fecha: {date.today().strftime('%d/%m/%Y')}<br>
-                        Hora registro: {datetime.now().strftime('%H:%M:%S')}<br>
+                        Fecha: {obtener_fecha_colombia().strftime('%d/%m/%Y')}<br>
+                        Hora registro: {obtener_hora_colombia().strftime('%H:%M:%S')}<br>
                         <strong>Inicio del día: 07:00 AM</strong><br>
                         <strong>Horas transcurridas hoy: {horas_totales:.2f}h</strong><br>
                         <strong>Total actividades: {len(registros_hoy)}</strong>
@@ -2432,8 +2448,8 @@ def mostrar_confirmacion_guardado():
     
     # Calcular tiempo de la actividad anterior basado en cédula
     df = load_data()
-    fecha_actual = date.today()
-    hora_actual = datetime.now().time()
+    fecha_actual = obtener_fecha_colombia()
+    hora_actual = obtener_hora_colombia_time()
     
     # Debug: mostrar información del DataFrame
     print(f"DEBUG Confirmación: DataFrame shape: {df.shape}")
@@ -2503,7 +2519,7 @@ def mostrar_confirmacion_guardado():
         <p><strong>📦 Referencia:</strong> {op_info.get('referencia', 'N/A')}</p>
         <p><strong>🔢 Item:</strong> {item_mostrar}</p>
         <p><strong>⏰ Tiempo de la Actividad Completada:</strong> {tiempo_texto}</p>
-        <p><strong> Fecha:</strong> {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}</p>
+        <p><strong> Fecha:</strong> {obtener_hora_colombia().strftime('%d/%m/%Y %H:%M:%S')}</p>
     </div>
     """, unsafe_allow_html=True)
     
@@ -2545,10 +2561,10 @@ def mostrar_confirmacion_guardado():
 def finalizar_actividad_actual(empleado, hora_finalizacion=None):
     """Finalizar la actividad actual de un empleado"""
     if hora_finalizacion is None:
-        hora_finalizacion = datetime.now().time()
+        hora_finalizacion = obtener_hora_colombia_time()
     
     df = load_data()
-    fecha_actual = date.today()
+    fecha_actual = obtener_fecha_colombia()
     
     # Buscar el último registro sin salida
     ultimo_registro = obtener_ultimo_registro_del_dia(empleado, fecha_actual, df)
@@ -2556,10 +2572,10 @@ def finalizar_actividad_actual(empleado, hora_finalizacion=None):
 def finalizar_actividad_por_cedula(cedula, hora_finalizacion=None):
     """Finalizar la actividad actual de un empleado basado en su cédula"""
     if hora_finalizacion is None:
-        hora_finalizacion = datetime.now().time()
+        hora_finalizacion = obtener_hora_colombia_time()
     
     df = load_data()
-    fecha_actual = date.today()
+    fecha_actual = obtener_fecha_colombia()
     
     # Buscar el último registro sin salida basado en cédula
     ultimo_registro = obtener_ultimo_registro_por_cedula(cedula, fecha_actual, df)
@@ -2587,8 +2603,8 @@ def finalizar_actividad_por_cedula(cedula, hora_finalizacion=None):
 def guardar_registro_completo(empleado_data):
     """Guardar registro usando la nueva lógica de conteos diarios"""
     df = load_data()
-    fecha_actual = date.today()
-    hora_actual = datetime.now().time()
+    fecha_actual = obtener_fecha_colombia()
+    hora_actual = obtener_hora_colombia_time()
     empleado = empleado_data['nombre']
     cedula = empleado_data['cedula']
     
@@ -3103,7 +3119,7 @@ def mostrar_dashboard():
     st.subheader("📊 Resumen de Hoy")
     
     df = load_data()
-    fecha_hoy = date.today()
+    fecha_hoy = obtener_fecha_colombia()
     registros_hoy = df[df['fecha'] == fecha_hoy]
     
     col1, col2, col3, col4 = st.columns(4)
@@ -3158,7 +3174,7 @@ def mostrar_dashboard():
     st.subheader("⏰ Horarios Laborales Configurados")
     
     # Obtener horario del día actual
-    fecha_actual = date.today()
+    fecha_actual = obtener_fecha_colombia()
     horario_hoy = obtener_horario_laboral(fecha_actual)
     
     col1, col2, col3 = st.columns(3)
