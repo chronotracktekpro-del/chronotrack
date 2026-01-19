@@ -786,7 +786,7 @@ def calcular_horas_conteo_diario(empleado_cedula, fecha_registro, hora_registro)
         print(f"{'='*60}\n")
         
         return {
-            'es_primer_registro': False,  # Siempre False, ya no usamos este flag
+            'es_primer_registro': True,  # True para primer registro del día
             'es_primer_registro_del_dia': True,
             'hora_inicio_conteo': hora_inicio_dia,
             'hora_fin_conteo': hora_actual_exacta,
@@ -2637,6 +2637,14 @@ def guardar_registro_completo(empleado_data):
     else:
         item_formateado = "1"
     
+    # Formatear hora_fin_conteo como string si es objeto time
+    hora_fin_str = ''
+    if conteo_resultado['hora_fin_conteo']:
+        if hasattr(conteo_resultado['hora_fin_conteo'], 'strftime'):
+            hora_fin_str = conteo_resultado['hora_fin_conteo'].strftime('%H:%M:%S')
+        else:
+            hora_fin_str = str(conteo_resultado['hora_fin_conteo'])
+    
     nuevo_registro = {
         'fecha': fecha_actual,
         'cedula': cedula,
@@ -2649,8 +2657,8 @@ def guardar_registro_completo(empleado_data):
         'nombre_cliente': str(op_info.get('cliente', '')).strip(),
         'descripcion_op': str(item_formateado).strip(),
         'descripcion_proceso': 'Produccion',
-        'hora_salida': conteo_resultado['hora_fin_conteo'] if conteo_resultado['es_primer_registro'] else '',
-        'horas_trabajadas': conteo_resultado['tiempo_trabajado'],  # Para primer registro será > 0, para siguientes será 0
+        'hora_salida': hora_fin_str,  # Siempre guardar la hora de fin del conteo
+        'horas_trabajadas': conteo_resultado['tiempo_trabajado'],  # Tiempo trabajado calculado
         'hora_exacta': conteo_resultado['hora_exacta_registro'],  # Hora exacta del registro calculada
         'mes': fecha_actual.strftime('%m'),
         'año': fecha_actual.strftime('%Y'),
