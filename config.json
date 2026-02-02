@@ -35,5 +35,20 @@
         "worksheet_empleados": "Datos_colab",
         "worksheet_servicios": "Servicio",
         "credentials_file": "credentials.json"
+    },
+    "adecuacion_locativa": {
+        "habilitado": true,
+        "lunes_jueves": {
+            "hora_inicio": "16:20",
+            "hora_fin": "16:30",
+            "hora_registro": "16:30"
+        },
+        "viernes": {
+            "hora_inicio": "15:20",
+            "hora_fin": "15:30",
+            "hora_registro": "15:30"
+        },
+        "servicio_nombre": "Adecuación Locativa",
+        "servicio_codigo": "29"
     }
 }
