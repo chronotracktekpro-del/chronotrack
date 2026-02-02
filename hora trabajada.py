@@ -464,6 +464,21 @@ def load_config():
             'worksheet_servicios': 'Servicio',
             'worksheet_registros': 'Registros',
             'credentials_file': 'credentials.json'
+        },
+        'adecuacion_locativa': {
+            'habilitado': True,
+            'lunes_jueves': {
+                'hora_inicio': '16:20',  # Desde las 4:20 PM
+                'hora_fin': '16:30',     # Hasta las 4:30 PM
+                'hora_registro': '16:30'  # Se registra como 4:30 PM
+            },
+            'viernes': {
+                'hora_inicio': '15:20',  # Desde las 3:20 PM
+                'hora_fin': '15:30',     # Hasta las 3:30 PM
+                'hora_registro': '15:30'  # Se registra como 3:30 PM
+            },
+            'servicio_nombre': 'Adecuación Locativa',
+            'servicio_codigo': '29'   # Código del servicio
         }
     }
     
@@ -497,6 +512,82 @@ def esta_bloqueado():
     max_attempts = admin_config.get('max_attempts', 3)
     
     return st.session_state.login_attempts >= max_attempts
+
+# ============================================
+# SISTEMA DE ADECUACIÓN LOCATIVA
+# Lunes a Jueves: 4:20 PM - 4:30 PM
+# Viernes: 3:20 PM - 3:30 PM
+# ============================================
+
+def es_horario_adecuacion_locativa():
+    """
+    Verificar si la hora actual está en el rango de adecuación locativa.
+    - Lunes a Jueves: 4:20 PM - 4:30 PM (se registra como 4:30 PM)
+    - Viernes: 3:20 PM - 3:30 PM (se registra como 3:30 PM)
+    """
+    config = load_config()
+    adecuacion = config.get('adecuacion_locativa', {})
+    
+    if not adecuacion.get('habilitado', True):
+        return False, None
+    
+    hora_actual = obtener_hora_colombia_time()
+    dia_semana = obtener_fecha_colombia().weekday()
+    
+    # Sábado (5) y Domingo (6) no aplica
+    if dia_semana > 4:
+        return False, None
+    
+    try:
+        servicio_nombre = adecuacion.get('servicio_nombre', 'Adecuación Locativa')
+        servicio_codigo = adecuacion.get('servicio_codigo', '29')
+        
+        # Determinar horarios según el día
+        if dia_semana == 4:  # Viernes
+            config_dia = adecuacion.get('viernes', {})
+            hora_inicio = datetime.strptime(config_dia.get('hora_inicio', '15:20'), '%H:%M').time()
+            hora_fin = datetime.strptime(config_dia.get('hora_fin', '15:30'), '%H:%M').time()
+            hora_registro = config_dia.get('hora_registro', '15:30')
+        else:  # Lunes a Jueves (0-3)
+            config_dia = adecuacion.get('lunes_jueves', {})
+            hora_inicio = datetime.strptime(config_dia.get('hora_inicio', '16:20'), '%H:%M').time()
+            hora_fin = datetime.strptime(config_dia.get('hora_fin', '16:30'), '%H:%M').time()
+            hora_registro = config_dia.get('hora_registro', '16:30')
+        
+        if hora_inicio <= hora_actual <= hora_fin:
+            dia_nombre = 'Viernes' if dia_semana == 4 else 'Lunes-Jueves'
+            return True, {
+                'hora_registro': hora_registro,
+                'servicio_nombre': servicio_nombre,
+                'servicio_codigo': servicio_codigo,
+                'mensaje': f'Registro automático a las {hora_registro} - {servicio_nombre} ({dia_nombre})'
+            }
+    except Exception as e:
+        print(f"Error al verificar horario adecuación locativa: {e}")
+    
+    return False, None
+
+def aplicar_adecuacion_locativa(hora_actual):
+    """Aplicar la lógica de adecuación locativa y retornar hora ajustada si aplica"""
+    es_adecuacion, info = es_horario_adecuacion_locativa()
+    
+    if es_adecuacion and info:
+        # Retornar la hora fija de registro (16:30)
+        hora_registro = datetime.strptime(info['hora_registro'], '%H:%M').time()
+        return True, hora_registro, info
+    
+    return False, hora_actual, None
+
+def obtener_servicio_adecuacion_locativa():
+    """Obtener información del servicio de adecuación locativa"""
+    config = load_config()
+    adecuacion = config.get('adecuacion_locativa', {})
+    
+    return {
+        'numero': adecuacion.get('servicio_codigo', '99'),
+        'nomservicio': adecuacion.get('servicio_nombre', 'Adecuación Locativa'),
+        'display': f"{adecuacion.get('servicio_codigo', '99')} - {adecuacion.get('servicio_nombre', 'Adecuación Locativa')}"
+    }
 
 def validar_codigo_barras(codigo):
     """Validar formato de código de barras y detectar tipo"""
@@ -769,15 +860,22 @@ def calcular_horas(hora_entrada, hora_salida, descontar_breaks=True):
     
     return horas_brutas
 
-def calcular_horas_conteo_diario(empleado_cedula, fecha_registro, hora_registro):
+def calcular_horas_conteo_diario(empleado_cedula, fecha_registro, hora_registro, hora_forzada=None):
     """
     Nueva lógica de conteos basada en verificación directa desde Google Sheets:
     - Consulta el Sheet al momento de leer la cédula
     - Si no hay registros del día: calcula desde 7:00 AM
     - Si ya hay registros del día: calcula desde la última hora_exacta del día
+    - hora_forzada: Si se proporciona, usa esta hora en lugar de la actual (para adecuación locativa)
     """
     hora_inicio_dia = time(7, 0)  # 7:00 AM por defecto
-    hora_actual_exacta = obtener_hora_colombia_time()  # Hora exacta actual en Colombia
+    
+    # Usar hora forzada si está disponible (adecuación locativa), sino hora actual
+    if hora_forzada:
+        hora_actual_exacta = hora_forzada
+    else:
+        hora_actual_exacta = obtener_hora_colombia_time()  # Hora exacta actual en Colombia
+    
     cedula_str = str(empleado_cedula).strip()
     
     print(f"\n{'='*60}")
@@ -2074,6 +2172,23 @@ def mostrar_paso_cedula():
                 </div>
                 """, unsafe_allow_html=True)
                 
+                # 🏠 VERIFICAR SI ES HORARIO DE ADECUACIÓN LOCATIVA (4:20 PM - 4:30 PM)
+                es_adecuacion, info_adecuacion = es_horario_adecuacion_locativa()
+                if es_adecuacion and info_adecuacion:
+                    st.markdown(f"""
+                    <div style='background: linear-gradient(135deg, #E8F5E9 0%, #C8E6C9 100%); 
+                                padding: 15px; border-radius: 12px; border-left: 5px solid #4CAF50; margin: 10px 0;'>
+                        <strong>🏠 Horario de Adecuación Locativa</strong><br>
+                        <span style='font-size: 16px; color: #2E7D32;'>
+                            Tu registro se guardará como: <strong>{info_adecuacion['hora_registro']}</strong>
+                        </span><br>
+                        <span style='font-size: 14px; color: #388E3C;'>
+                            Actividad: <strong>{info_adecuacion['servicio_nombre']}</strong>
+                        </span><br>
+                        <small style='color: #666;'>Los registros entre 4:20 PM y 4:30 PM se asignan automáticamente a esta actividad</small>
+                    </div>
+                    """, unsafe_allow_html=True)
+                
                 # Mostrar información del último registro si existe
                 if hora_exacta_anterior and diferencia_horas is not None:
                     st.markdown(f"""
@@ -2608,6 +2723,35 @@ def guardar_registro_completo(empleado_data):
     empleado = empleado_data['nombre']
     cedula = empleado_data['cedula']
     
+    # ============================================
+    # VERIFICAR ADECUACIÓN LOCATIVA (4:20 PM - 4:30 PM)
+    # ============================================
+    es_adecuacion, info_adecuacion = es_horario_adecuacion_locativa()
+    
+    if es_adecuacion and info_adecuacion:
+        # Aplicar hora fija de 16:30 y servicio de Adecuación Locativa
+        hora_actual = datetime.strptime(info_adecuacion['hora_registro'], '%H:%M').time()
+        
+        # Sobrescribir el servicio con Adecuación Locativa
+        servicio_adecuacion = obtener_servicio_adecuacion_locativa()
+        empleado_data['servicio_info'] = {
+            'numero': servicio_adecuacion['numero'],
+            'nomservicio': servicio_adecuacion['nomservicio']
+        }
+        empleado_data['codigo_actividad'] = servicio_adecuacion['numero']
+        
+        # Establecer OP a 0000 para adecuación locativa
+        empleado_data['op_info'] = {
+            'orden': '0000',
+            'referencia': 'N/A',
+            'cantidades': 'N/A',
+            'cliente': 'N/A',
+            'item': 'Adecuación Locativa'
+        }
+        empleado_data['codigo_op'] = '0000'
+        
+        st.info(f"🏠 **Adecuación Locativa aplicada:** Hora ajustada a {info_adecuacion['hora_registro']} - {info_adecuacion['servicio_nombre']}")
+    
     # Obtener información completa del servicio y OP
     servicio_info = empleado_data.get('servicio_info', {})
     op_info = empleado_data.get('op_info', {})
@@ -2620,7 +2764,9 @@ def guardar_registro_completo(empleado_data):
     df_actualizado = load_data()
     
     # Calcular usando la nueva lógica con DataFrame actualizado
-    conteo_resultado = calcular_horas_conteo_diario(cedula, fecha_actual, hora_actual)
+    # Si es adecuación locativa, pasar la hora forzada
+    hora_para_calculo = hora_actual if es_adecuacion else None
+    conteo_resultado = calcular_horas_conteo_diario(cedula, fecha_actual, hora_actual, hora_para_calculo)
     
     # Debug: Mostrar información de la nueva lógica
     with st.expander("🕐 Debug - Nueva Lógica de Conteos"):
@@ -3388,6 +3534,13 @@ def obtener_horas_por_op(df_filtrado=None, fecha_inicio=None, fecha_fin=None):
     if df.empty:
         return pd.DataFrame()
     
+    # Verificar que existan las columnas necesarias
+    if 'op' not in df.columns:
+        return pd.DataFrame()
+    
+    if 'horas_trabajadas' not in df.columns:
+        return pd.DataFrame()
+    
     # Filtrar solo registros con OP y horas trabajadas válidas
     df_con_op = df[
         (df['op'].notna()) & 
@@ -3426,6 +3579,13 @@ def obtener_horas_por_op(df_filtrado=None, fecha_inicio=None, fecha_fin=None):
 def obtener_detalle_op(op_seleccionada, fecha_inicio=None, fecha_fin=None):
     """Obtener detalle de horas por empleado para una OP específica"""
     df = load_data()
+    
+    if df.empty:
+        return pd.DataFrame()
+    
+    # Verificar que existan las columnas necesarias
+    if 'op' not in df.columns or 'horas_trabajadas' not in df.columns:
+        return pd.DataFrame()
     
     if fecha_inicio and fecha_fin:
         df = df[(df['fecha'] >= fecha_inicio) & (df['fecha'] <= fecha_fin)]
