@@ -2551,7 +2551,7 @@ def mostrar_paso_op():
             st.session_state.empleado_data['codigo_op'] = codigo_op
             st.session_state.empleado_data['op_info'] = op_info
             
-            # Mostrar mensaje de éxito y avanzar
+            # Mostrar mensaje de éxito y avanzar al paso 4 (confirmación)
             st.success(f"✅ OP encontrada: {op_info['orden']} - {op_info['cliente']}")
             
             # Esperar un momento para mostrar el mensaje y luego avanzar
@@ -2687,22 +2687,21 @@ def mostrar_confirmacion_guardado():
         if st.button("💾 Guardar Registro", type="primary"):
             # Guardar el registro completo
             guardar_registro_completo(empleado_data)
-            # Mostrar confirmación y reiniciar
+            # Mostrar confirmación
             st.success("✅ ¡Registro guardado exitosamente!")
             
+            # Esperar un momento para mostrar el mensaje
+            import time
+            time.sleep(1)
             
-            # Reiniciar para nuevo registro
+            # Limpiar TODOS los datos de sesión para nuevo registro
             st.session_state.step = 1
             st.session_state.empleado_data = {}
+            if 'tiempo_calculado' in st.session_state:
+                del st.session_state.tiempo_calculado
             
-            # Auto-reload después de 3 segundos
-            st.markdown("""
-            <script>
-            setTimeout(function() {
-                window.location.reload();
-            }, 3000);
-            </script>
-            """, unsafe_allow_html=True)
+            # Volver al paso 1 automáticamente
+            st.rerun()
 
 def finalizar_actividad_actual(empleado, hora_finalizacion=None):
     """Finalizar la actividad actual de un empleado"""
@@ -3032,7 +3031,7 @@ Se crearán **DOS registros**:
     
     st.balloons()
     
-    # Redirigir automáticamente a la página de registro de cédula después de 1 segundo
+    # Redirigir automáticamente al paso 1 (ingresar cédula) después de 1 segundo
     import time
     time.sleep(1)
     
@@ -3052,7 +3051,8 @@ Se crearán **DOS registros**:
     if 'tiempo_calculado' in st.session_state:
         del st.session_state.tiempo_calculado
     
-    st.session_state.screen = 'inicio'
+    # Ir a la pantalla de registro de colaborador con paso 1
+    st.session_state.screen = 'registro_colaborador'
     st.rerun()
 
 def guardar_en_google_sheets_simple(registro):
