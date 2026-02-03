@@ -3093,7 +3093,7 @@ def guardar_en_google_sheets_simple(registro):
             codigo_servicio,  # Código
             actividad_servicio,  # Actividad
             str(registro.get('descripcion_op', '')),  # Item
-            str(tiempo_horas_calculado),  # 🆕 Tiempo [Hr] - USAR EL CALCULADO DESDE LA DIFERENCIA
+            float(tiempo_horas_calculado) if tiempo_horas_calculado else 0,  # Tiempo [Hr] - como número para evitar apóstrofe
             '',  # Observaciones (vacío)
             str(registro.get('descripcion_proceso', 'Produccion')),  # Proceso
             str(registro.get('mes', '')),  # Mes
@@ -3168,7 +3168,7 @@ def guardar_en_google_sheets(registro):
                 tiempo_horas_calculado = st.session_state.tiempo_calculado
             
             # Mapear los datos a los encabezados exactos como en la imagen
-            # Orden: Fecha | Cédula | Nombre | Orden | Cliente | Código | Actividad | Item | Tiempo [Hr] | Observaciones | Proceso | Usuario de Ingreso | Mes | Año | Semana | REFERENCIA
+            # Orden: Fecha | Cédula | Nombre | Orden | Cliente | Código | Actividad | Item | Tiempo [Hr] | Observaciones | Proceso | Mes | Año | Semana | REFERENCIA | hora_exacta
             fila_registro = [
                 fecha_obj.strftime('%d/%m/%Y'),  # Fecha
                 str(registro.get('cedula', '')),  # Cédula (de Datos_colab por cedula)
@@ -3178,13 +3178,14 @@ def guardar_en_google_sheets(registro):
                 str(servicio_info.get('numero', '')),  # Código (literal de Servicio)
                 str(servicio_info.get('nomservicio', '')),  # Actividad (literal de Servicio)
                 str(registro.get('op_info', {}).get('item', '')),  # Item (descripción de la OP)
-                str(tiempo_horas_calculado),  # 🆕 Tiempo [Hr] - USAR EL CALCULADO DESDE LA DIFERENCIA
+                float(tiempo_horas_calculado) if tiempo_horas_calculado else 0,  # Tiempo [Hr] - como número para evitar apóstrofe
                 '',  # Observaciones (vacío)
-                'Producción',  # Proceso (con acento como en la imagen)
+                'Produccion',  # Proceso (sin acento para consistencia)
                 str(registro.get('mes', fecha_obj.strftime('%m'))),  # Mes
                 str(registro.get('año', fecha_obj.strftime('%Y'))),  # Año
                 str(registro.get('semana', str(fecha_obj.isocalendar()[1]))),  # Semana
-                str(registro.get('op_info', {}).get('referencia', ''))  # REFERENCIA (de OPS por referencia)
+                str(registro.get('op_info', {}).get('referencia', '')),  # REFERENCIA (de OPS por referencia)
+                str(registro.get('hora_exacta', ''))  # hora_exacta (última columna)
             ]
             
             # Agregar la fila a la hoja existente (RAW evita el apóstrofe)
