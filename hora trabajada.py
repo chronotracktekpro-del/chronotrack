@@ -3031,6 +3031,23 @@ Se crearán **DOS registros**:
         """)
     
     st.balloons()
+    
+    # Redirigir automáticamente a la página de registro de cédula después de 2 segundos
+    import time
+    time.sleep(1)
+    
+    # Limpiar datos de sesión para nuevo registro
+    if 'cedula' in st.session_state:
+        del st.session_state.cedula
+    if 'empleado' in st.session_state:
+        del st.session_state.empleado
+    if 'op_seleccionada' in st.session_state:
+        del st.session_state.op_seleccionada
+    if 'servicio_seleccionado' in st.session_state:
+        del st.session_state.servicio_seleccionado
+    
+    st.session_state.screen = 'inicio'
+    st.rerun()
 
 def guardar_en_google_sheets_simple(registro):
     """Función ultra-básica para guardar en Google Sheets con máxima confiabilidad"""
@@ -3103,8 +3120,8 @@ def guardar_en_google_sheets_simple(registro):
             str(registro.get('hora_exacta', '')),  # hora_exacta (última columna)
         ]
         
-        # Agregar la fila (RAW evita el apóstrofe en valores numéricos)
-        worksheet.append_row(fila_datos, value_input_option='RAW')
+        # Agregar la fila (USER_ENTERED para que números se guarden como números)
+        worksheet.append_row(fila_datos, value_input_option='USER_ENTERED')
         return True
         
     except Exception as e:
@@ -3132,10 +3149,10 @@ def guardar_en_google_sheets_simple(registro):
                         str(registro.get('fecha', '')),
                         str(registro.get('empleado', '')),
                         str(registro.get('op', '')),
-                        str(registro.get('tiempo_horas', 0))
+                        float(registro.get('tiempo_horas', 0)) if registro.get('tiempo_horas', 0) else 0
                     ]
                     
-                    worksheet.append_row(fila_minima, value_input_option='RAW')
+                    worksheet.append_row(fila_minima, value_input_option='USER_ENTERED')
                     return True
         except:
             pass
@@ -3188,8 +3205,8 @@ def guardar_en_google_sheets(registro):
                 str(registro.get('hora_exacta', ''))  # hora_exacta (última columna)
             ]
             
-            # Agregar la fila a la hoja existente (RAW evita el apóstrofe)
-            worksheet.append_row(fila_registro, value_input_option='RAW')
+            # Agregar la fila a la hoja existente (USER_ENTERED para que números se guarden como números)
+            worksheet.append_row(fila_registro, value_input_option='USER_ENTERED')
             
         except Exception as e:
             raise Exception(f"Error guardando en Google Sheets: {str(e)}")
