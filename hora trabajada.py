@@ -469,12 +469,12 @@ def load_config():
             'habilitado': True,
             'lunes_jueves': {
                 'hora_inicio': '16:20',  # Desde las 4:20 PM
-                'hora_fin': '16:30',     # Hasta las 4:30 PM
+                'hora_fin': '17:00',     # Hasta las 5:00 PM
                 'hora_registro': '16:30'  # Se registra como 4:30 PM
             },
             'viernes': {
                 'hora_inicio': '15:20',  # Desde las 3:20 PM
-                'hora_fin': '15:30',     # Hasta las 3:30 PM
+                'hora_fin': '16:00',     # Hasta las 4:00 PM
                 'hora_registro': '15:30'  # Se registra como 3:30 PM
             },
             'servicio_nombre': 'Adecuación Locativa',
@@ -4245,3 +4245,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
