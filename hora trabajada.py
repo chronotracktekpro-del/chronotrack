@@ -3032,11 +3032,15 @@ Se crearán **DOS registros**:
     
     st.balloons()
     
-    # Redirigir automáticamente a la página de registro de cédula después de 2 segundos
+    # Redirigir automáticamente a la página de registro de cédula después de 1 segundo
     import time
     time.sleep(1)
     
-    # Limpiar datos de sesión para nuevo registro
+    # Limpiar TODOS los datos de sesión para nuevo registro completo
+    # Esto fuerza a pasar por los pasos 1, 2 y 3 nuevamente
+    st.session_state.step = 1  # Resetear al paso 1 (ingresar cédula)
+    st.session_state.empleado_data = {}  # Limpiar datos del empleado
+    
     if 'cedula' in st.session_state:
         del st.session_state.cedula
     if 'empleado' in st.session_state:
@@ -3045,6 +3049,8 @@ Se crearán **DOS registros**:
         del st.session_state.op_seleccionada
     if 'servicio_seleccionado' in st.session_state:
         del st.session_state.servicio_seleccionado
+    if 'tiempo_calculado' in st.session_state:
+        del st.session_state.tiempo_calculado
     
     st.session_state.screen = 'inicio'
     st.rerun()
