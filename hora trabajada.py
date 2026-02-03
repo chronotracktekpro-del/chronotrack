@@ -515,15 +515,24 @@ def esta_bloqueado():
 
 # ============================================
 # SISTEMA DE ADECUACIÓN LOCATIVA
-# Lunes a Jueves: 4:20 PM - 4:30 PM
-# Viernes: 3:20 PM - 3:30 PM
+# Lunes a Jueves: 4:20 PM - 5:00 PM (OP se registra a hora real, Adec. Locativa desde hora real hasta 4:30)
+# Viernes: 3:20 PM - 3:30 PM (OP se registra a hora real, Adec. Locativa desde hora real hasta 3:30)
 # ============================================
 
 def es_horario_adecuacion_locativa():
     """
     Verificar si la hora actual está en el rango de adecuación locativa.
-    - Lunes a Jueves: 4:20 PM - 4:30 PM (se registra como 4:30 PM)
-    - Viernes: 3:20 PM - 3:30 PM (se registra como 3:30 PM)
+    NUEVA LÓGICA:
+    - Se guarda PRIMERO la OP que se está trabajando con la hora real
+    - Se guarda SEGUNDO un registro automático de Adecuación Locativa desde la hora real hasta la hora de cierre (4:30/3:30)
+    
+    Retorna:
+    - es_adecuacion: True si está en horario de adecuación locativa
+    - info: diccionario con:
+        - hora_actual_real: la hora real del registro (ej: 16:25)
+        - hora_cierre: la hora de cierre para adecuación locativa (ej: 16:30)
+        - servicio_nombre, servicio_codigo: datos del servicio de Adec. Locativa
+        - tiempo_adecuacion: tiempo en horas desde hora_actual_real hasta hora_cierre
     """
     config = load_config()
     adecuacion = config.get('adecuacion_locativa', {})
@@ -547,20 +556,39 @@ def es_horario_adecuacion_locativa():
             config_dia = adecuacion.get('viernes', {})
             hora_inicio = datetime.strptime(config_dia.get('hora_inicio', '15:20'), '%H:%M').time()
             hora_fin = datetime.strptime(config_dia.get('hora_fin', '15:30'), '%H:%M').time()
-            hora_registro = config_dia.get('hora_registro', '15:30')
+            hora_cierre_str = config_dia.get('hora_registro', '15:30')
         else:  # Lunes a Jueves (0-3)
             config_dia = adecuacion.get('lunes_jueves', {})
             hora_inicio = datetime.strptime(config_dia.get('hora_inicio', '16:20'), '%H:%M').time()
-            hora_fin = datetime.strptime(config_dia.get('hora_fin', '16:30'), '%H:%M').time()
-            hora_registro = config_dia.get('hora_registro', '16:30')
+            hora_fin = datetime.strptime(config_dia.get('hora_fin', '17:00'), '%H:%M').time()
+            hora_cierre_str = config_dia.get('hora_registro', '16:30')
+        
+        hora_cierre = datetime.strptime(hora_cierre_str, '%H:%M').time()
         
         if hora_inicio <= hora_actual <= hora_fin:
             dia_nombre = 'Viernes' if dia_semana == 4 else 'Lunes-Jueves'
+            
+            # Calcular tiempo de adecuación locativa (desde hora actual hasta hora de cierre)
+            hora_actual_dt = datetime.combine(date.today(), hora_actual)
+            hora_cierre_dt = datetime.combine(date.today(), hora_cierre)
+            
+            # Si la hora actual ya pasó la hora de cierre, el tiempo de adecuación es 0
+            if hora_actual > hora_cierre:
+                tiempo_adecuacion = 0
+            else:
+                diferencia = hora_cierre_dt - hora_actual_dt
+                tiempo_adecuacion = round(diferencia.total_seconds() / 3600, 3)
+            
             return True, {
-                'hora_registro': hora_registro,
+                'hora_actual_real': hora_actual,
+                'hora_cierre': hora_cierre,
+                'hora_cierre_str': hora_cierre_str,
                 'servicio_nombre': servicio_nombre,
                 'servicio_codigo': servicio_codigo,
-                'mensaje': f'Registro automático a las {hora_registro} - {servicio_nombre} ({dia_nombre})'
+                'tiempo_adecuacion': tiempo_adecuacion,
+                'mensaje': f'OP registrada a las {hora_actual.strftime("%H:%M")} + Adecuación Locativa ({tiempo_adecuacion:.3f}h hasta {hora_cierre_str}) ({dia_nombre})',
+                # Mantener compatibilidad con código existente
+                'hora_registro': hora_cierre_str
             }
     except Exception as e:
         print(f"Error al verificar horario adecuación locativa: {e}")
@@ -2172,20 +2200,23 @@ def mostrar_paso_cedula():
                 </div>
                 """, unsafe_allow_html=True)
                 
-                # 🏠 VERIFICAR SI ES HORARIO DE ADECUACIÓN LOCATIVA (4:20 PM - 4:30 PM)
+                # 🏠 VERIFICAR SI ES HORARIO DE ADECUACIÓN LOCATIVA (4:20 PM - 5:00 PM)
                 es_adecuacion, info_adecuacion = es_horario_adecuacion_locativa()
                 if es_adecuacion and info_adecuacion:
                     st.markdown(f"""
                     <div style='background: linear-gradient(135deg, #E8F5E9 0%, #C8E6C9 100%); 
                                 padding: 15px; border-radius: 12px; border-left: 5px solid #4CAF50; margin: 10px 0;'>
-                        <strong>🏠 Horario de Adecuación Locativa</strong><br>
+                        <strong>🏠 Horario de Adecuación Locativa Detectado</strong><br>
                         <span style='font-size: 16px; color: #2E7D32;'>
-                            Tu registro se guardará como: <strong>{info_adecuacion['hora_registro']}</strong>
+                            Se crearán <strong>2 registros</strong>:
                         </span><br>
                         <span style='font-size: 14px; color: #388E3C;'>
-                            Actividad: <strong>{info_adecuacion['servicio_nombre']}</strong>
+                            1️⃣ <strong>Tu OP</strong> - hasta las {info_adecuacion['hora_actual_real'].strftime('%H:%M')}
                         </span><br>
-                        <small style='color: #666;'>Los registros entre 4:20 PM y 4:30 PM se asignan automáticamente a esta actividad</small>
+                        <span style='font-size: 14px; color: #388E3C;'>
+                            2️⃣ <strong>{info_adecuacion['servicio_nombre']}</strong> - desde {info_adecuacion['hora_actual_real'].strftime('%H:%M')} hasta {info_adecuacion['hora_cierre_str']} ({info_adecuacion['tiempo_adecuacion']:.3f}h)
+                        </span><br>
+                        <small style='color: #666;'>La OP se registra con tu hora real, y automáticamente se agrega Adecuación Locativa hasta las {info_adecuacion['hora_cierre_str']}</small>
                     </div>
                     """, unsafe_allow_html=True)
                 
@@ -2724,38 +2755,29 @@ def guardar_registro_completo(empleado_data):
     cedula = empleado_data['cedula']
     
     # ============================================
-    # VERIFICAR ADECUACIÓN LOCATIVA (4:20 PM - 4:30 PM)
+    # VERIFICAR ADECUACIÓN LOCATIVA (4:20 PM - 5:00 PM)
+    # NUEVA LÓGICA: 
+    # 1. Primero guarda la OP que se está trabajando con la hora REAL
+    # 2. Luego guarda automáticamente Adecuación Locativa desde hora real hasta 4:30
     # ============================================
     es_adecuacion, info_adecuacion = es_horario_adecuacion_locativa()
     
-    if es_adecuacion and info_adecuacion:
-        # Aplicar hora fija de 16:30 y servicio de Adecuación Locativa
-        hora_actual = datetime.strptime(info_adecuacion['hora_registro'], '%H:%M').time()
-        
-        # Sobrescribir el servicio con Adecuación Locativa
-        servicio_adecuacion = obtener_servicio_adecuacion_locativa()
-        empleado_data['servicio_info'] = {
-            'numero': servicio_adecuacion['numero'],
-            'nomservicio': servicio_adecuacion['nomservicio']
-        }
-        empleado_data['codigo_actividad'] = servicio_adecuacion['numero']
-        
-        # Establecer OP a 0000 para adecuación locativa
-        empleado_data['op_info'] = {
-            'orden': '0000',
-            'referencia': 'N/A',
-            'cantidades': 'N/A',
-            'cliente': 'N/A',
-            'item': 'Adecuación Locativa'
-        }
-        empleado_data['codigo_op'] = '0000'
-        
-        st.info(f"🏠 **Adecuación Locativa aplicada:** Hora ajustada a {info_adecuacion['hora_registro']} - {info_adecuacion['servicio_nombre']}")
+    # NO modificamos empleado_data aquí - primero guardamos la OP normal
+    # La adecuación locativa se guardará como un SEGUNDO registro después
     
-    # Obtener información completa del servicio y OP
+    # Obtener información completa del servicio y OP (datos originales, NO modificados)
     servicio_info = empleado_data.get('servicio_info', {})
     op_info = empleado_data.get('op_info', {})
     servicio_display = f"{servicio_info.get('numero', '')} - {servicio_info.get('nomservicio', '')}" if servicio_info else ''
+    
+    # Mostrar mensaje informativo si es horario de adecuación locativa
+    if es_adecuacion and info_adecuacion:
+        st.info(f"""🏠 **Horario de Adecuación Locativa detectado**
+        
+Se crearán **DOS registros**:
+1. **OP {op_info.get('orden', 'seleccionada')}** - hasta las {info_adecuacion['hora_actual_real'].strftime('%H:%M')}
+2. **Adecuación Locativa** - desde {info_adecuacion['hora_actual_real'].strftime('%H:%M')} hasta {info_adecuacion['hora_cierre_str']} ({info_adecuacion['tiempo_adecuacion']:.3f}h)
+        """)
     
     # NUEVA LÓGICA DE CONTEOS DIARIOS
     st.info("🕐 Aplicando nueva lógica de conteos diarios...")
@@ -2764,9 +2786,9 @@ def guardar_registro_completo(empleado_data):
     df_actualizado = load_data()
     
     # Calcular usando la nueva lógica con DataFrame actualizado
-    # Si es adecuación locativa, pasar la hora forzada
-    hora_para_calculo = hora_actual if es_adecuacion else None
-    conteo_resultado = calcular_horas_conteo_diario(cedula, fecha_actual, hora_actual, hora_para_calculo)
+    # Usamos la hora actual REAL (no la hora de cierre de adecuación locativa)
+    conteo_resultado = calcular_horas_conteo_diario(cedula, fecha_actual, hora_actual, None)
+
     
     # Debug: Mostrar información de la nueva lógica
     with st.expander("🕐 Debug - Nueva Lógica de Conteos"):
@@ -2869,6 +2891,72 @@ def guardar_registro_completo(empleado_data):
                 st.success(f"✅ Primer registro del día guardado - Tiempo: {conteo_resultado['tiempo_trabajado']:.2f} horas")
             else:
                 st.success(f"✅ Nueva actividad guardada - Tiempo inicial: {conteo_resultado['tiempo_trabajado']:.3f} horas")
+            
+            # ============================================
+            # PASO 6B: GUARDAR SEGUNDO REGISTRO DE ADECUACIÓN LOCATIVA
+            # Si es horario de adecuación locativa, guardar el registro automático
+            # ============================================
+            if es_adecuacion and info_adecuacion and info_adecuacion['tiempo_adecuacion'] > 0:
+                st.info(f"🏠 Guardando registro automático de Adecuación Locativa...")
+                
+                servicio_adecuacion = obtener_servicio_adecuacion_locativa()
+                hora_cierre = info_adecuacion['hora_cierre']
+                
+                # Crear registro de Adecuación Locativa
+                registro_adecuacion_para_sheets = {
+                    'fecha': fecha_actual,
+                    'cedula': cedula,
+                    'empleado': empleado,
+                    'codigo_actividad': servicio_adecuacion['numero'],
+                    'op': '0000',  # OP 0000 para adecuación locativa
+                    'codigo_producto': 'N/A',
+                    'cantidades': 'N/A',
+                    'nombre_cliente': 'N/A',
+                    'descripcion_op': 'Adecuación Locativa',
+                    'descripcion_proceso': 'Produccion',
+                    'hora_entrada': hora_actual,  # Desde la hora actual (ej: 16:25)
+                    'hora_salida': hora_cierre,  # Hasta la hora de cierre (ej: 16:30)
+                    'tiempo_horas': info_adecuacion['tiempo_adecuacion'],  # Tiempo calculado (ej: 0.083h = 5 min)
+                    'hora_exacta': hora_cierre.strftime('%H:%M:%S'),  # Hora exacta es la hora de cierre
+                    'mes': fecha_actual.strftime('%m'),
+                    'año': fecha_actual.strftime('%Y'),
+                    'semana': str(fecha_actual.isocalendar()[1]),
+                    'referencia': 'N/A',
+                    'servicio': f"{servicio_adecuacion['numero']} - {servicio_adecuacion['nomservicio']}"
+                }
+                
+                # Guardar en Google Sheets
+                guardar_en_google_sheets_simple(registro_adecuacion_para_sheets)
+                
+                # También guardar en archivo local
+                registro_adecuacion_local = {
+                    'fecha': fecha_actual,
+                    'cedula': cedula,
+                    'empleado': empleado,
+                    'hora_entrada': hora_actual.strftime('%H:%M:%S') if hasattr(hora_actual, 'strftime') else str(hora_actual),
+                    'codigo_actividad': servicio_adecuacion['numero'],
+                    'op': '0000',
+                    'codigo_producto': 'N/A',
+                    'cantidades': 'N/A',
+                    'nombre_cliente': 'N/A',
+                    'descripcion_op': 'Adecuación Locativa',
+                    'descripcion_proceso': 'Produccion',
+                    'hora_salida': hora_cierre.strftime('%H:%M:%S'),
+                    'horas_trabajadas': info_adecuacion['tiempo_adecuacion'],
+                    'hora_exacta': hora_cierre.strftime('%H:%M:%S'),
+                    'mes': fecha_actual.strftime('%m'),
+                    'año': fecha_actual.strftime('%Y'),
+                    'semana': str(fecha_actual.isocalendar()[1]),
+                    'referencia': 'N/A',
+                    'servicio': f"{servicio_adecuacion['numero']} - {servicio_adecuacion['nomservicio']}"
+                }
+                
+                df = load_data()
+                df = pd.concat([df, pd.DataFrame([registro_adecuacion_local])], ignore_index=True)
+                save_data(df)
+                
+                st.success(f"✅ Adecuación Locativa guardada - Tiempo: {info_adecuacion['tiempo_adecuacion']:.3f} horas ({int(info_adecuacion['tiempo_adecuacion'] * 60)} minutos)")
+            
         except Exception as e:
             tipo_registro = "primer registro" if conteo_resultado['es_primer_registro'] else "nueva actividad"
             st.error(f"❌ Error guardando {tipo_registro}: {str(e)}")
@@ -3015,8 +3103,8 @@ def guardar_en_google_sheets_simple(registro):
             str(registro.get('hora_exacta', '')),  # hora_exacta (última columna)
         ]
         
-        # Agregar la fila
-        worksheet.append_row(fila_datos)
+        # Agregar la fila (RAW evita el apóstrofe en valores numéricos)
+        worksheet.append_row(fila_datos, value_input_option='RAW')
         return True
         
     except Exception as e:
@@ -3047,7 +3135,7 @@ def guardar_en_google_sheets_simple(registro):
                         str(registro.get('tiempo_horas', 0))
                     ]
                     
-                    worksheet.append_row(fila_minima)
+                    worksheet.append_row(fila_minima, value_input_option='RAW')
                     return True
         except:
             pass
@@ -3099,8 +3187,8 @@ def guardar_en_google_sheets(registro):
                 str(registro.get('op_info', {}).get('referencia', ''))  # REFERENCIA (de OPS por referencia)
             ]
             
-            # Agregar la fila a la hoja existente
-            worksheet.append_row(fila_registro)
+            # Agregar la fila a la hoja existente (RAW evita el apóstrofe)
+            worksheet.append_row(fila_registro, value_input_option='RAW')
             
         except Exception as e:
             raise Exception(f"Error guardando en Google Sheets: {str(e)}")
@@ -4245,4 +4333,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
