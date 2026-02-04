@@ -1839,6 +1839,10 @@ def obtener_lista_ops():
                 cantidades = str(record.get('Cantidades', '')).strip()
                 estado = str(record.get('estado', '')).strip()  # Estado de planos
                 
+                # Filtrar OPs con estado "Terminado" - no mostrar en la lista
+                if estado.lower() == 'terminado':
+                    continue  # Saltar esta OP, no agregarla a la lista
+                
                 # Buscar tiemposprome (insensible a mayúsculas/minúsculas)
                 tiemposprome = ''
                 for key in record.keys():
