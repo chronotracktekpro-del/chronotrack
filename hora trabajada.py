@@ -2745,6 +2745,90 @@ def finalizar_actividad_por_cedula(cedula, hora_finalizacion=None):
     
     return False, 0
 
+def verificar_doble_guardado(cedula, minutos_minimos=1):
+    """
+    Verifica si el empleado ha guardado un registro en los últimos X minutos.
+    Retorna (puede_guardar, segundos_restantes, mensaje)
+    """
+    try:
+        # Conectar a Google Sheets para obtener el último registro
+        spreadsheet, mensaje = conectar_google_sheets()
+        if spreadsheet is None:
+            # Si no hay conexión, permitir el guardado (mejor no bloquear)
+            return True, 0, ""
+        
+        config = load_config()
+        worksheet_name = config.get('google_sheets', {}).get('worksheet_registros', 'Registros')
+        worksheet = spreadsheet.worksheet(worksheet_name)
+        
+        # Obtener todos los registros
+        all_values = worksheet.get_all_values()
+        if len(all_values) < 2:
+            return True, 0, ""  # No hay registros, puede guardar
+        
+        headers = all_values[0]
+        rows = all_values[1:]
+        
+        # Buscar índices de las columnas necesarias
+        idx_cedula = None
+        idx_fecha = None
+        idx_hora_exacta = None
+        
+        for i, header in enumerate(headers):
+            header_lower = header.lower().strip()
+            if header_lower == 'cédula' or header_lower == 'cedula':
+                idx_cedula = i
+            elif header_lower == 'fecha':
+                idx_fecha = i
+            elif header_lower == 'hora_exacta':
+                idx_hora_exacta = i
+        
+        if idx_cedula is None or idx_hora_exacta is None:
+            return True, 0, ""  # No se encontraron columnas, permitir
+        
+        # Buscar el último registro de esta cédula (recorrer de atrás hacia adelante)
+        fecha_hoy = obtener_fecha_colombia().strftime('%d/%m/%Y')
+        hora_ahora = obtener_hora_colombia()
+        
+        for row in reversed(rows):
+            if len(row) > max(idx_cedula, idx_hora_exacta):
+                cedula_registro = str(row[idx_cedula]).strip()
+                if cedula_registro == str(cedula).strip():
+                    # Encontramos el último registro de esta cédula
+                    fecha_registro = row[idx_fecha] if idx_fecha is not None and len(row) > idx_fecha else ''
+                    hora_exacta_str = row[idx_hora_exacta].strip()
+                    
+                    # Solo verificar registros de hoy
+                    if fecha_registro == fecha_hoy and hora_exacta_str:
+                        try:
+                            # Parsear la hora exacta (formato HH:MM:SS)
+                            hora_parts = hora_exacta_str.split(':')
+                            if len(hora_parts) >= 2:
+                                hora_registro = hora_ahora.replace(
+                                    hour=int(hora_parts[0]),
+                                    minute=int(hora_parts[1]),
+                                    second=int(hora_parts[2]) if len(hora_parts) > 2 else 0,
+                                    microsecond=0
+                                )
+                                
+                                # Calcular diferencia en segundos
+                                diferencia = (hora_ahora - hora_registro).total_seconds()
+                                
+                                # Si la diferencia es menor a minutos_minimos * 60 segundos
+                                if diferencia < (minutos_minimos * 60):
+                                    segundos_restantes = int((minutos_minimos * 60) - diferencia)
+                                    return False, segundos_restantes, f"⏳ Debes esperar {segundos_restantes} segundos antes de guardar otro registro."
+                        except:
+                            pass
+                    break  # Ya encontramos el último registro de esta cédula
+        
+        return True, 0, ""
+        
+    except Exception as e:
+        # En caso de error, permitir el guardado
+        print(f"Error verificando doble guardado: {e}")
+        return True, 0, ""
+
 def guardar_registro_completo(empleado_data):
     """Guardar registro usando la nueva lógica de conteos diarios"""
     df = load_data()
@@ -2752,6 +2836,18 @@ def guardar_registro_completo(empleado_data):
     hora_actual = obtener_hora_colombia_time()
     empleado = empleado_data['nombre']
     cedula = empleado_data['cedula']
+    
+    # ============================================
+    # VERIFICAR DOBLE GUARDADO (menos de 1 minuto)
+    # ============================================
+    puede_guardar, segundos_restantes, mensaje_bloqueo = verificar_doble_guardado(cedula, minutos_minimos=1)
+    if not puede_guardar:
+        st.error(f"""⛔ **Registro bloqueado por seguridad**
+        
+{mensaje_bloqueo}
+
+Esto evita registros duplicados accidentales.""")
+        return  # Salir de la función sin guardar
     
     # ============================================
     # VERIFICAR ADECUACIÓN LOCATIVA (4:20 PM - 5:00 PM)
@@ -3106,7 +3202,7 @@ def guardar_en_google_sheets_simple(registro):
         print(f"💾 [GUARDADO SHEETS] Tiempo a guardar: {tiempo_horas_calculado} horas")
         
         # Fila de datos según estructura exacta del Sheet:
-        # Fecha | Cédula | Nombre | Orden | Cliente | Código | Actividad | Item | Tiempo [Hr] | Observaciones | Proceso | Mes | Año | Semana | REFERENCIA | hora_exacta
+        # Fecha | Cédula | Nombre | Orden | Cliente | Código | Actividad | Item | Tiempo [Hr] | Cantidades | Proceso | Mes | Año | Semana | REFERENCIA | hora_exacta
         fila_datos = [
             fecha_str,  # Fecha
             str(registro.get('cedula', '')),  # Cédula
@@ -3117,7 +3213,7 @@ def guardar_en_google_sheets_simple(registro):
             actividad_servicio,  # Actividad
             str(registro.get('descripcion_op', '')),  # Item
             float(tiempo_horas_calculado) if tiempo_horas_calculado else 0,  # Tiempo [Hr] - como número para evitar apóstrofe
-            '',  # Observaciones (vacío)
+            str(registro.get('op_info', {}).get('cantidades', registro.get('cantidades', ''))),  # Cantidades (de OPS)
             str(registro.get('descripcion_proceso', 'Produccion')),  # Proceso
             str(registro.get('mes', '')),  # Mes
             str(registro.get('año', '')),  # Año
@@ -3191,7 +3287,7 @@ def guardar_en_google_sheets(registro):
                 tiempo_horas_calculado = st.session_state.tiempo_calculado
             
             # Mapear los datos a los encabezados exactos como en la imagen
-            # Orden: Fecha | Cédula | Nombre | Orden | Cliente | Código | Actividad | Item | Tiempo [Hr] | Observaciones | Proceso | Mes | Año | Semana | REFERENCIA | hora_exacta
+            # Orden: Fecha | Cédula | Nombre | Orden | Cliente | Código | Actividad | Item | Tiempo [Hr] | Cantidades | Proceso | Mes | Año | Semana | REFERENCIA | hora_exacta
             fila_registro = [
                 fecha_obj.strftime('%d/%m/%Y'),  # Fecha
                 str(registro.get('cedula', '')),  # Cédula (de Datos_colab por cedula)
@@ -3202,7 +3298,7 @@ def guardar_en_google_sheets(registro):
                 str(servicio_info.get('nomservicio', '')),  # Actividad (literal de Servicio)
                 str(registro.get('op_info', {}).get('item', '')),  # Item (descripción de la OP)
                 float(tiempo_horas_calculado) if tiempo_horas_calculado else 0,  # Tiempo [Hr] - como número para evitar apóstrofe
-                '',  # Observaciones (vacío)
+                str(registro.get('op_info', {}).get('cantidades', registro.get('cantidades', ''))),  # Cantidades (de OPS)
                 'Produccion',  # Proceso (sin acento para consistencia)
                 str(registro.get('mes', fecha_obj.strftime('%m'))),  # Mes
                 str(registro.get('año', fecha_obj.strftime('%Y'))),  # Año
