@@ -1106,6 +1106,8 @@ def diagnosticar_conexion_sheets():
 
 def conectar_google_sheets():
     """Conectar a Google Sheets usando las credenciales configuradas (local o Streamlit Cloud)"""
+    from google.oauth2.service_account import Credentials  # Importar siempre al inicio
+    
     config = load_config()
     gs_config = config.get('google_sheets', {})
     
@@ -1123,7 +1125,6 @@ def conectar_google_sheets():
         # OPCIÓN 1: Intentar usar Streamlit Secrets (para Streamlit Cloud)
         try:
             if hasattr(st, 'secrets') and 'gcp_service_account' in st.secrets:
-                from google.oauth2.service_account import Credentials
                 credentials_dict = dict(st.secrets["gcp_service_account"])
                 credentials = Credentials.from_service_account_info(credentials_dict, scopes=scope)
         except Exception as e:
@@ -1798,6 +1799,529 @@ def registrar_entrada_salida(empleado, codigo_barras, servicio_info=None):
     """Función de compatibilidad - redirige a la nueva función de actividades continuas"""
     return registrar_actividad_continua(empleado, codigo_barras, servicio_info)
 
+def obtener_lista_ops():
+    """Obtener lista de todas las OPs desde el sheet OPS"""
+    try:
+        spreadsheet, mensaje = conectar_google_sheets()
+        if spreadsheet is None:
+            return [], f"Error de conexión: {mensaje}"
+        
+        worksheet = spreadsheet.worksheet('OPS')
+        
+        # Obtener todos los registros - leer TODAS las columnas
+        try:
+            all_values = worksheet.get_all_values()
+            if len(all_values) < 2:
+                return [], "La hoja 'OPS' está vacía"
+            
+            headers = all_values[0]
+            rows = all_values[1:]
+            
+            records = []
+            for row in rows:
+                record = {}
+                for i, header in enumerate(headers):
+                    if header.strip():
+                        record[header.strip()] = row[i] if i < len(row) else ''
+                if record:
+                    records.append(record)
+        except Exception as e:
+            return [], f"Error al leer hoja 'OPS': {str(e)}"
+        
+        # Crear lista de OPs con información relevante
+        lista_ops = []
+        for record in records:
+            orden = str(record.get('orden', '')).strip()
+            if orden:  # Solo agregar si tiene orden
+                cliente = str(record.get('cliente', '')).strip()
+                referencia = str(record.get('referencia', '')).strip()
+                item = str(record.get('item', '')).strip()
+                cantidades = str(record.get('Cantidades', '')).strip()
+                estado = str(record.get('estado', '')).strip()  # Estado de planos
+                
+                # Buscar tiemposprome (insensible a mayúsculas/minúsculas)
+                tiemposprome = ''
+                for key in record.keys():
+                    if key.lower() == 'tiemposprome':
+                        tiemposprome = str(record.get(key, '')).strip()
+                        break
+                
+                # Parsear tiemposprome (formato: "10,35,32,54")
+                tiempos_estimados = {'corte': 0, 'mecanizado': 0, 'doblado': 0, 'ensamble': 0}
+                if tiemposprome:
+                    try:
+                        partes = tiemposprome.split(',')
+                        if len(partes) >= 4:
+                            tiempos_estimados['corte'] = float(partes[0].strip()) if partes[0].strip() else 0
+                            tiempos_estimados['mecanizado'] = float(partes[1].strip()) if partes[1].strip() else 0
+                            tiempos_estimados['doblado'] = float(partes[2].strip()) if partes[2].strip() else 0
+                            tiempos_estimados['ensamble'] = float(partes[3].strip()) if partes[3].strip() else 0
+                    except:
+                        pass
+                
+                # Crear texto para mostrar en el desplegable
+                texto_display = f"{orden} - {cliente} - {referencia}"
+                
+                lista_ops.append({
+                    'orden': orden,
+                    'cliente': cliente,
+                    'referencia': referencia,
+                    'item': item,
+                    'cantidades': cantidades,
+                    'estado': estado,  # Estado de planos desde OPS
+                    'tiempos_estimados': tiempos_estimados,  # Tiempos estimados parseados
+                    'tiemposprome_raw': tiemposprome,  # Valor crudo para debug
+                    'display': texto_display
+                })
+        
+        return lista_ops, "OK"
+        
+    except Exception as e:
+        return [], f"Error al obtener OPs: {str(e)}"
+
+def obtener_horas_trabajadas_por_actividad(orden):
+    """
+    Obtener las horas trabajadas por actividad (CORTE, MECANIZADO, DOBLADO, ENSAMBLE)
+    desde el sheet Registros para una OP específica.
+    """
+    try:
+        spreadsheet, mensaje = conectar_google_sheets()
+        if spreadsheet is None:
+            return {'corte': 0, 'mecanizado': 0, 'doblado': 0, 'ensamble': 0}
+        
+        config = load_config()
+        worksheet_name = config.get('google_sheets', {}).get('worksheet_registros', 'Registros')
+        worksheet = spreadsheet.worksheet(worksheet_name)
+        
+        # Obtener todos los registros
+        all_values = worksheet.get_all_values()
+        if len(all_values) < 2:
+            return {'corte': 0, 'mecanizado': 0, 'doblado': 0, 'ensamble': 0}
+        
+        headers = all_values[0]
+        rows = all_values[1:]
+        
+        # Buscar índices de las columnas necesarias
+        idx_orden = None
+        idx_actividad = None
+        idx_tiempo = None
+        
+        for i, header in enumerate(headers):
+            header_lower = header.lower().strip()
+            if header_lower == 'orden':
+                idx_orden = i
+            elif header_lower == 'actividad':
+                idx_actividad = i
+            elif header_lower == 'tiempo [hr]' or header_lower == 'tiempo':
+                idx_tiempo = i
+        
+        if idx_orden is None or idx_actividad is None or idx_tiempo is None:
+            return {'corte': 0, 'mecanizado': 0, 'doblado': 0, 'ensamble': 0}
+        
+        # Sumar horas por actividad para la OP especificada
+        horas_trabajadas = {'corte': 0, 'mecanizado': 0, 'doblado': 0, 'ensamble': 0}
+        
+        for row in rows:
+            if len(row) > max(idx_orden, idx_actividad, idx_tiempo):
+                orden_registro = str(row[idx_orden]).strip()
+                
+                # Verificar si es la OP que buscamos
+                if orden_registro == str(orden).strip():
+                    actividad = str(row[idx_actividad]).strip().upper()
+                    try:
+                        tiempo = float(str(row[idx_tiempo]).replace(',', '.')) if row[idx_tiempo] else 0
+                    except:
+                        tiempo = 0
+                    
+                    # Clasificar por actividad
+                    if 'CORTE' in actividad:
+                        horas_trabajadas['corte'] += tiempo
+                    elif 'MECANIZADO' in actividad:
+                        horas_trabajadas['mecanizado'] += tiempo
+                    elif 'DOBLADO' in actividad:
+                        horas_trabajadas['doblado'] += tiempo
+                    elif 'ENSAMBLE' in actividad:
+                        horas_trabajadas['ensamble'] += tiempo
+        
+        return horas_trabajadas
+        
+    except Exception as e:
+        print(f"Error obteniendo horas trabajadas: {e}")
+        return {'corte': 0, 'mecanizado': 0, 'doblado': 0, 'ensamble': 0}
+
+def calcular_progreso(horas_trabajadas, tiempo_estimado):
+    """Calcular el porcentaje de progreso. Puede superar 100%."""
+    if tiempo_estimado <= 0:
+        return 0
+    progreso = (horas_trabajadas / tiempo_estimado) * 100
+    return progreso  # Sin límite para detectar excesos
+
+def obtener_color_estado_barra(progreso):
+    """
+    Determinar color y estado según el progreso:
+    - < 60%: Verde (ÓPTIMO)
+    - 60% - 100%: Amarillo (MODERADO)
+    - > 100%: Rojo (CRÍTICO)
+    """
+    if progreso < 60:
+        return {
+            'color': '#28A745',  # Verde
+            'color_claro': '#5dd879',
+            'estado': 'ÓPTIMO',
+            'color_texto': '#155724'
+        }
+    elif progreso <= 100:
+        return {
+            'color': '#FFC107',  # Amarillo
+            'color_claro': '#ffda6a',
+            'estado': 'MODERADO',
+            'color_texto': '#856404'
+        }
+    else:
+        return {
+            'color': '#DC3545',  # Rojo
+            'color_claro': '#ff6b6b',
+            'estado': 'CRÍTICO',
+            'color_texto': '#721c24'
+        }
+
+def pantalla_avance_proyecto():
+    """Pantalla para registrar avance de proyectos"""
+    
+    # Header estilo tarjeta Tekpro
+    st.markdown("""
+    <div style='
+        background: white;
+        border-radius: 20px;
+        overflow: hidden;
+        box-shadow: 0 10px 40px rgba(62, 174, 165, 0.15);
+        margin-bottom: 30px;
+    '>
+        <div style='
+            height: 100px;
+            background: linear-gradient(135deg, #2D8B84 0%, #3EAEA5 25%, #5BC4BC 50%, #7DD4CE 75%);
+            position: relative;
+            overflow: hidden;
+        '>
+            <div style='position: relative; z-index: 1; text-align: center; padding-top: 25px;'>
+                <h1 style='
+                    font-family: Poppins, sans-serif;
+                    font-size: 32px;
+                    font-weight: 500;
+                    color: white;
+                    margin: 0;
+                    letter-spacing: 1px;
+                '>Avance de Proyecto</h1>
+                <p style='
+                    font-family: Poppins, sans-serif;
+                    font-size: 14px;
+                    color: rgba(255,255,255,0.9);
+                    margin: 5px 0 0 0;
+                '>Seguimiento de Órdenes de Producción</p>
+            </div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Botón volver
+    if st.button("← Volver al Inicio", type="secondary"):
+        st.session_state.screen = 'inicio'
+        st.rerun()
+    
+    st.markdown("<br>", unsafe_allow_html=True)
+    
+    # Obtener lista de OPs
+    lista_ops, mensaje = obtener_lista_ops()
+    
+    if not lista_ops:
+        st.warning(f"⚠️ No se encontraron OPs: {mensaje}")
+        return
+    
+    # Crear opciones para el selectbox
+    opciones_display = ["-- Selecciona una OP --"] + [op['display'] for op in lista_ops]
+    
+    # Contenedor principal
+    st.markdown("""
+    <div style='
+        background: white;
+        padding: 25px;
+        border-radius: 15px;
+        border-left: 5px solid #3EAEA5;
+        box-shadow: 0 5px 20px rgba(62, 174, 165, 0.15);
+        margin-bottom: 20px;
+    '>
+        <h3 style='color: #2D8B84; margin-bottom: 15px;'>🔍 Seleccionar Orden de Producción</h3>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Selectbox con las OPs
+    op_seleccionada_display = st.selectbox(
+        "Orden de Producción:",
+        opciones_display,
+        key="select_op_avance"
+    )
+    
+    # Si se seleccionó una OP válida, mostrar su información
+    if op_seleccionada_display != "-- Selecciona una OP --":
+        # Buscar la OP seleccionada en la lista
+        op_seleccionada = None
+        for op in lista_ops:
+            if op['display'] == op_seleccionada_display:
+                op_seleccionada = op
+                break
+        
+        if op_seleccionada:
+            st.markdown(f"""
+            <div style='
+                background: linear-gradient(135deg, #E3F5F4 0%, #F0FFFE 100%);
+                padding: 20px;
+                border-radius: 12px;
+                border-left: 5px solid #3EAEA5;
+                margin: 20px 0;
+                position: relative;
+            '>
+                <div style='display: flex; justify-content: space-between; align-items: flex-start;'>
+                    <div style='flex: 1;'>
+                        <h4 style='color: #2D8B84; margin-bottom: 15px;'>📋 Información de la OP</h4>
+                        <p><strong>🏭 Cliente:</strong> {op_seleccionada['cliente']}</p>
+                        <p><strong>📦 Referencia:</strong> {op_seleccionada['referencia']}</p>
+                        <p><strong>📝 Item:</strong> {op_seleccionada['item']}</p>
+                        <p><strong>🔢 Cantidades:</strong> {op_seleccionada['cantidades']}</p>
+                    </div>
+                    <div style='text-align: right; padding-left: 20px;'>
+                        <span style='font-size: 16px; color: #6c757d; display: block;'>ORDEN</span>
+                        <span style='font-size: 72px; font-weight: 700; color: #2D8B84; line-height: 1;'>{op_seleccionada['orden']}</span>
+                    </div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # DEBUG: Mostrar valor de tiemposprome
+            with st.expander("🔧 Debug - Tiempos Estimados"):
+                st.write(f"**Valor crudo de tiemposprome:** `{op_seleccionada.get('tiemposprome_raw', 'NO ENCONTRADO')}`")
+                st.write(f"**Tiempos parseados:** {op_seleccionada.get('tiempos_estimados', {})}")
+            
+            # Guardar en session_state para uso futuro
+            st.session_state.op_avance_seleccionada = op_seleccionada
+            
+            # ============================================
+            # SECCIÓN DE AVANCE POR ETAPAS
+            # ============================================
+            st.markdown("""
+            <div style='
+                background: white;
+                padding: 20px;
+                border-radius: 15px;
+                border-left: 5px solid #2D8B84;
+                box-shadow: 0 5px 20px rgba(62, 174, 165, 0.15);
+                margin: 25px 0 15px 0;
+            '>
+                <h3 style='color: #2D8B84; margin-bottom: 10px;'>📊 Estado de Avance por Etapas</h3>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # ============================================
+            # 1. PLANOS - Estado leído desde OPS columna 'estado'
+            # ============================================
+            estado_planos = op_seleccionada.get('estado', 'Sin estado')
+            
+            # Determinar color según estado
+            if estado_planos.lower() == 'en programacion' or estado_planos.lower() == 'en programación':
+                color_planos = "#FFC107"  # Amarillo
+                color_texto = "#856404"  # Amarillo oscuro para texto
+                icono_planos = "⏳"
+                estado_display = "En programación"
+            elif estado_planos.lower() == 'en proceso':
+                color_planos = "#17A2B8"  # Azul
+                color_texto = "#0c5460"  # Azul oscuro para texto
+                icono_planos = "🔄"
+                estado_display = "En proceso"
+            elif estado_planos.lower() == 'terminado':
+                color_planos = "#28A745"  # Verde
+                color_texto = "#155724"  # Verde oscuro para texto
+                icono_planos = "✅"
+                estado_display = "Terminado"
+            else:
+                color_planos = "#6c757d"  # Gris
+                color_texto = "#495057"  # Gris oscuro para texto
+                icono_planos = "❓"
+                estado_display = estado_planos if estado_planos else "Sin estado"
+            
+            st.markdown(f"""
+            <div style='
+                background: #f8f9fa;
+                padding: 15px 20px;
+                border-radius: 10px;
+                border-left: 4px solid {color_planos};
+                margin: 10px 0;
+            '>
+                <h4 style='color: #495057; margin: 0 0 10px 0;'>📐 PLANOS</h4>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # Mostrar indicador visual del estado de planos (solo lectura desde OPS)
+            st.markdown(f"""
+            <div style='
+                background: {color_planos}20;
+                padding: 15px 20px;
+                border-radius: 8px;
+                border-left: 4px solid {color_planos};
+                margin: 5px 0 20px 0;
+            '>
+                <span style='font-size: 20px; color: {color_texto}; font-weight: bold;'>
+                    {icono_planos} Estado: {estado_display}
+                </span>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # ============================================
+            # OBTENER DATOS PARA CALCULAR PROGRESO
+            # ============================================
+            tiempos_estimados = op_seleccionada.get('tiempos_estimados', {'corte': 0, 'mecanizado': 0, 'doblado': 0, 'ensamble': 0})
+            horas_trabajadas = obtener_horas_trabajadas_por_actividad(op_seleccionada['orden'])
+            
+            # Calcular progresos
+            progreso_corte = calcular_progreso(horas_trabajadas['corte'], tiempos_estimados['corte'])
+            progreso_mecanizado = calcular_progreso(horas_trabajadas['mecanizado'], tiempos_estimados['mecanizado'])
+            progreso_doblado = calcular_progreso(horas_trabajadas['doblado'], tiempos_estimados['doblado'])
+            progreso_ensamble = calcular_progreso(horas_trabajadas['ensamble'], tiempos_estimados['ensamble'])
+            
+            # ============================================
+            # 2. CORTE - Barra de progreso
+            # ============================================
+            estado_corte = obtener_color_estado_barra(progreso_corte)
+            progreso_corte_visual = min(progreso_corte, 100)  # Para la barra visual, máximo 100%
+            horas_excedidas_corte = horas_trabajadas['corte'] - tiempos_estimados['corte'] if progreso_corte > 100 else 0
+            
+            st.markdown(f"""
+            <div style='
+                background: #f8f9fa;
+                padding: 15px 20px;
+                border-radius: 10px;
+                border-left: 4px solid {estado_corte['color']};
+                margin: 10px 0;
+            '>
+                <h4 style='color: #495057; margin: 0;'>CORTE</h4>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            texto_exceso_corte = f" - ⚠️ Se ha excedido {horas_excedidas_corte:.2f} hrs" if progreso_corte > 100 else ""
+            st.markdown(f"""
+            <div style='display: flex; justify-content: space-between; margin: 5px 0; font-size: 14px;'>
+                <span>📊 Trabajadas: <strong>{horas_trabajadas['corte']:.2f} hrs</strong></span>
+                <span>🎯 Estimadas: <strong>{tiempos_estimados['corte']:.0f} hrs</strong></span>
+            </div>
+            <div style='background: #e9ecef; border-radius: 10px; height: 30px; margin: 5px 0 5px 0; overflow: hidden; position: relative;'>
+                <div style='background: linear-gradient(90deg, {estado_corte['color']}, {estado_corte['color_claro']}); width: {progreso_corte_visual:.1f}%; height: 100%; border-radius: 10px; transition: width 0.3s ease;'></div>
+                <span style='position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: {'white' if progreso_corte_visual > 40 else '#212529'}; font-weight: bold; font-size: 14px;'>{progreso_corte:.1f}%</span>
+            </div>
+            <div style='text-align: center; margin-bottom: 20px;'>
+                <span style='color: {estado_corte['color_texto']}; font-weight: bold; font-size: 14px;'>{estado_corte['estado']}{texto_exceso_corte}</span>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # ============================================
+            # 3. MECANIZADO - Barra de progreso
+            # ============================================
+            estado_mecanizado = obtener_color_estado_barra(progreso_mecanizado)
+            progreso_mecanizado_visual = min(progreso_mecanizado, 100)
+            horas_excedidas_mecanizado = horas_trabajadas['mecanizado'] - tiempos_estimados['mecanizado'] if progreso_mecanizado > 100 else 0
+            
+            st.markdown(f"""
+            <div style='
+                background: #f8f9fa;
+                padding: 15px 20px;
+                border-radius: 10px;
+                border-left: 4px solid {estado_mecanizado['color']};
+                margin: 10px 0;
+            '>
+                <h4 style='color: #495057; margin: 0;'>MECANIZADO</h4>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            texto_exceso_mecanizado = f" - ⚠️ Se ha excedido {horas_excedidas_mecanizado:.2f} hrs" if progreso_mecanizado > 100 else ""
+            st.markdown(f"""
+            <div style='display: flex; justify-content: space-between; margin: 5px 0; font-size: 14px;'>
+                <span>📊 Trabajadas: <strong>{horas_trabajadas['mecanizado']:.2f} hrs</strong></span>
+                <span>🎯 Estimadas: <strong>{tiempos_estimados['mecanizado']:.0f} hrs</strong></span>
+            </div>
+            <div style='background: #e9ecef; border-radius: 10px; height: 30px; margin: 5px 0 5px 0; overflow: hidden; position: relative;'>
+                <div style='background: linear-gradient(90deg, {estado_mecanizado['color']}, {estado_mecanizado['color_claro']}); width: {progreso_mecanizado_visual:.1f}%; height: 100%; border-radius: 10px; transition: width 0.3s ease;'></div>
+                <span style='position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: {'white' if progreso_mecanizado_visual > 40 else '#212529'}; font-weight: bold; font-size: 14px;'>{progreso_mecanizado:.1f}%</span>
+            </div>
+            <div style='text-align: center; margin-bottom: 20px;'>
+                <span style='color: {estado_mecanizado['color_texto']}; font-weight: bold; font-size: 14px;'>{estado_mecanizado['estado']}{texto_exceso_mecanizado}</span>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # ============================================
+            # 4. DOBLADO - Barra de progreso
+            # ============================================
+            estado_doblado = obtener_color_estado_barra(progreso_doblado)
+            progreso_doblado_visual = min(progreso_doblado, 100)
+            horas_excedidas_doblado = horas_trabajadas['doblado'] - tiempos_estimados['doblado'] if progreso_doblado > 100 else 0
+            
+            st.markdown(f"""
+            <div style='
+                background: #f8f9fa;
+                padding: 15px 20px;
+                border-radius: 10px;
+                border-left: 4px solid {estado_doblado['color']};
+                margin: 10px 0;
+            '>
+                <h4 style='color: #495057; margin: 0;'>DOBLADO</h4>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            texto_exceso_doblado = f" - ⚠️ Se ha excedido {horas_excedidas_doblado:.2f} hrs" if progreso_doblado > 100 else ""
+            st.markdown(f"""
+            <div style='display: flex; justify-content: space-between; margin: 5px 0; font-size: 14px;'>
+                <span>📊 Trabajadas: <strong>{horas_trabajadas['doblado']:.2f} hrs</strong></span>
+                <span>🎯 Estimadas: <strong>{tiempos_estimados['doblado']:.0f} hrs</strong></span>
+            </div>
+            <div style='background: #e9ecef; border-radius: 10px; height: 30px; margin: 5px 0 5px 0; overflow: hidden; position: relative;'>
+                <div style='background: linear-gradient(90deg, {estado_doblado['color']}, {estado_doblado['color_claro']}); width: {progreso_doblado_visual:.1f}%; height: 100%; border-radius: 10px; transition: width 0.3s ease;'></div>
+                <span style='position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: {'white' if progreso_doblado_visual > 40 else '#212529'}; font-weight: bold; font-size: 14px;'>{progreso_doblado:.1f}%</span>
+            </div>
+            <div style='text-align: center; margin-bottom: 20px;'>
+                <span style='color: {estado_doblado['color_texto']}; font-weight: bold; font-size: 14px;'>{estado_doblado['estado']}{texto_exceso_doblado}</span>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # ============================================
+            # 5. ENSAMBLE - Barra de progreso
+            # ============================================
+            estado_ensamble = obtener_color_estado_barra(progreso_ensamble)
+            progreso_ensamble_visual = min(progreso_ensamble, 100)
+            horas_excedidas_ensamble = horas_trabajadas['ensamble'] - tiempos_estimados['ensamble'] if progreso_ensamble > 100 else 0
+            
+            st.markdown(f"""
+            <div style='
+                background: #f8f9fa;
+                padding: 15px 20px;
+                border-radius: 10px;
+                border-left: 4px solid {estado_ensamble['color']};
+                margin: 10px 0;
+            '>
+                <h4 style='color: #495057; margin: 0;'>ENSAMBLE</h4>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            texto_exceso_ensamble = f" - ⚠️ Se ha excedido {horas_excedidas_ensamble:.2f} hrs" if progreso_ensamble > 100 else ""
+            st.markdown(f"""
+            <div style='display: flex; justify-content: space-between; margin: 5px 0; font-size: 14px;'>
+                <span>📊 Trabajadas: <strong>{horas_trabajadas['ensamble']:.2f} hrs</strong></span>
+                <span>🎯 Estimadas: <strong>{tiempos_estimados['ensamble']:.0f} hrs</strong></span>
+            </div>
+            <div style='background: #e9ecef; border-radius: 10px; height: 30px; margin: 5px 0 5px 0; overflow: hidden; position: relative;'>
+                <div style='background: linear-gradient(90deg, {estado_ensamble['color']}, {estado_ensamble['color_claro']}); width: {progreso_ensamble_visual:.1f}%; height: 100%; border-radius: 10px; transition: width 0.3s ease;'></div>
+                <span style='position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: {'white' if progreso_ensamble_visual > 40 else '#212529'}; font-weight: bold; font-size: 14px;'>{progreso_ensamble:.1f}%</span>
+            </div>
+            <div style='text-align: center; margin-bottom: 20px;'>
+                <span style='color: {estado_ensamble['color_texto']}; font-weight: bold; font-size: 14px;'>{estado_ensamble['estado']}{texto_exceso_ensamble}</span>
+            </div>
+            """, unsafe_allow_html=True)
+
 def pantalla_inicio():
     """Pantalla inicial de la aplicación con diseño Tekpro estilo tarjeta"""
     
@@ -1825,6 +2349,12 @@ def pantalla_inicio():
         
         if st.button("INICIAR REGISTRO", type="primary", use_container_width=True):
             st.session_state.screen = 'registro_colaborador'
+            st.rerun()
+        
+        st.markdown("<br>", unsafe_allow_html=True)
+        
+        if st.button("AVANCE PROYECTO", type="secondary", use_container_width=True):
+            st.session_state.screen = 'avance_proyecto'
             st.rerun()
         
     
@@ -2747,7 +3277,7 @@ def finalizar_actividad_por_cedula(cedula, hora_finalizacion=None):
 
 def verificar_doble_guardado(cedula, minutos_minimos=1):
     """
-    Verifica si el empleado ha guardado un registro en los últimos X minutos.
+    Verifica si el empleado ha guardado un registro en los últimos X minutos.  
     Retorna (puede_guardar, segundos_restantes, mensaje)
     """
     try:
@@ -4447,6 +4977,8 @@ def main():
         pantalla_inicio()
     elif st.session_state.screen == 'registro_colaborador':
         pantalla_registro_colaborador()
+    elif st.session_state.screen == 'avance_proyecto':
+        pantalla_avance_proyecto()
     else:
         st.session_state.screen = 'inicio'
         pantalla_inicio()
