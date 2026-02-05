@@ -17,8 +17,15 @@ def obtener_hora_colombia():
     return datetime.now(COLOMBIA_TZ)
 
 def obtener_hora_colombia_time():
-    """Obtener solo el objeto time en zona horaria de Colombia"""
-    return obtener_hora_colombia().time()
+    """Obtener solo el objeto time en zona horaria de Colombia, con límite máximo de 16:30"""
+    hora_actual = obtener_hora_colombia().time()
+    hora_limite = time(16, 30, 0)  # 16:30:00
+    
+    # Si la hora actual es mayor a 16:30, devolver 16:30
+    if hora_actual > hora_limite:
+        return hora_limite
+    
+    return hora_actual
 
 def obtener_fecha_colombia():
     """Obtener la fecha actual en zona horaria de Colombia"""
@@ -1989,6 +1996,94 @@ def obtener_color_estado_barra(progreso):
             'color_texto': '#721c24'
         }
 
+def obtener_actividades_servicio():
+    """Obtener todas las actividades del sheet Servicio con horas registradas"""
+    try:
+        spreadsheet, mensaje = conectar_google_sheets()
+        if spreadsheet is None:
+            return [], f"Error de conexión: {mensaje}"
+        
+        # ===== OBTENER ACTIVIDADES DE SERVICIO =====
+        worksheet = spreadsheet.worksheet('Servicio')
+        
+        # Obtener todos los registros
+        all_values = worksheet.get_all_values()
+        if len(all_values) < 2:
+            return [], "La hoja 'Servicio' está vacía"
+        
+        headers = all_values[0]
+        rows = all_values[1:]
+        
+        # Buscar índice de la columna 'actividad' (insensible a mayúsculas)
+        idx_actividad = None
+        idx_numero = None
+        for i, header in enumerate(headers):
+            header_lower = header.lower().strip()
+            if header_lower == 'actividad' or header_lower == 'nomservicio':
+                idx_actividad = i
+            if header_lower == 'numero' or header_lower == 'código' or header_lower == 'codigo':
+                idx_numero = i
+        
+        if idx_actividad is None:
+            return [], "No se encontró la columna 'actividad' en el sheet Servicio"
+        
+        # ===== OBTENER HORAS DE REGISTROS =====
+        # Obtener registros para sumar horas por actividad
+        horas_por_actividad = {}
+        try:
+            worksheet_registros = spreadsheet.worksheet('Registros')
+            registros_values = worksheet_registros.get_all_values()
+            
+            if len(registros_values) >= 2:
+                headers_reg = registros_values[0]
+                rows_reg = registros_values[1:]
+                
+                # Buscar índices de Actividad y Tiempo [Hr]
+                idx_actividad_reg = None
+                idx_tiempo = None
+                for i, header in enumerate(headers_reg):
+                    header_lower = header.lower().strip()
+                    if header_lower == 'actividad':
+                        idx_actividad_reg = i
+                    if header_lower == 'tiempo [hr]' or header_lower == 'tiempo':
+                        idx_tiempo = i
+                
+                if idx_actividad_reg is not None and idx_tiempo is not None:
+                    for row in rows_reg:
+                        if len(row) > max(idx_actividad_reg, idx_tiempo):
+                            actividad_reg = str(row[idx_actividad_reg]).strip()
+                            tiempo_str = str(row[idx_tiempo]).strip().replace(',', '.')
+                            try:
+                                tiempo = float(tiempo_str) if tiempo_str else 0
+                            except:
+                                tiempo = 0
+                            
+                            if actividad_reg:
+                                if actividad_reg not in horas_por_actividad:
+                                    horas_por_actividad[actividad_reg] = 0
+                                horas_por_actividad[actividad_reg] += tiempo
+        except Exception as e:
+            print(f"Error al obtener horas de Registros: {e}")
+        
+        # ===== CREAR LISTA DE ACTIVIDADES CON HORAS =====
+        actividades = []
+        for row in rows:
+            if len(row) > idx_actividad:
+                actividad = str(row[idx_actividad]).strip()
+                numero = str(row[idx_numero]).strip() if idx_numero is not None and len(row) > idx_numero else ''
+                if actividad:  # Solo agregar si tiene actividad
+                    horas = horas_por_actividad.get(actividad, 0)
+                    actividades.append({
+                        'numero': numero,
+                        'actividad': actividad,
+                        'horas': round(horas, 2)
+                    })
+        
+        return actividades, "OK"
+        
+    except Exception as e:
+        return [], f"Error al obtener actividades: {str(e)}"
+
 def pantalla_avance_proyecto():
     """Pantalla para registrar avance de proyectos"""
     
@@ -2027,12 +2122,103 @@ def pantalla_avance_proyecto():
     </div>
     """, unsafe_allow_html=True)
     
-    # Botón volver
-    if st.button("← Volver al Inicio", type="secondary"):
-        st.session_state.screen = 'inicio'
-        st.rerun()
+    # Inicializar estado para mostrar reporte
+    if 'mostrar_reporte_general' not in st.session_state:
+        st.session_state.mostrar_reporte_general = False
+    
+    # Botones: Volver y Reporte General
+    col_btn1, col_btn2, col_btn3 = st.columns([1, 1, 2])
+    
+    with col_btn1:
+        if st.button("← Volver al Inicio", type="secondary"):
+            st.session_state.screen = 'inicio'
+            st.session_state.mostrar_reporte_general = False
+            st.rerun()
+    
+    with col_btn2:
+        if st.button("📊 Reporte General", type="primary"):
+            st.session_state.mostrar_reporte_general = not st.session_state.mostrar_reporte_general
+            st.rerun()
     
     st.markdown("<br>", unsafe_allow_html=True)
+    
+    # Si se activa el reporte general, mostrar las actividades
+    if st.session_state.mostrar_reporte_general:
+        st.markdown("""
+        <div style='
+            background: white;
+            padding: 25px;
+            border-radius: 15px;
+            border-left: 5px solid #007BFF;
+            box-shadow: 0 5px 20px rgba(0, 123, 255, 0.15);
+            margin-bottom: 20px;
+        '>
+            <h3 style='color: #007BFF; margin-bottom: 15px;'>📊 Reporte General - Actividades de Servicio</h3>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Obtener actividades del sheet Servicio
+        actividades, msg = obtener_actividades_servicio()
+        
+        if not actividades:
+            st.warning(f"⚠️ No se encontraron actividades: {msg}")
+        else:
+            # Calcular total de horas
+            total_horas = sum(act['horas'] for act in actividades)
+            
+            # Mostrar las actividades en una tabla bonita
+            st.markdown(f"""
+            <div style='
+                background: linear-gradient(135deg, #E8F4FD 0%, #F0F8FF 100%);
+                padding: 15px;
+                border-radius: 10px;
+                margin-bottom: 15px;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                flex-wrap: wrap;
+                gap: 10px;
+            '>
+                <span style='font-size: 16px; color: #0056b3;'>📋 Total de actividades: <strong>{len(actividades)}</strong></span>
+                <span style='font-size: 16px; color: #28a745;'>⏱️ Total de horas registradas: <strong>{total_horas:.2f} hrs</strong></span>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # Crear filas de la tabla
+            filas_html = ""
+            for i, act in enumerate(actividades, 1):
+                bg_color = '#f8f9fa' if i % 2 == 0 else 'white'
+                horas_display = f"{act['horas']:.2f} hrs" if act['horas'] > 0 else "0.00 hrs"
+                horas_color = '#28a745' if act['horas'] > 0 else '#6c757d'
+                filas_html += f"<tr style='background: {bg_color}; border-bottom: 1px solid #dee2e6;'><td style='padding: 10px 15px; color: #6c757d;'>{i}</td><td style='padding: 10px 15px; font-weight: 600; color: #007BFF;'>{act['numero']}</td><td style='padding: 10px 15px; color: #212529;'>{act['actividad']}</td><td style='padding: 10px 15px; text-align: right; font-weight: 600; color: {horas_color};'>{horas_display}</td></tr>"
+            
+            # Tabla completa
+            st.markdown(f"""
+            <div style='max-height: 400px; overflow-y: auto; border-radius: 10px; border: 1px solid #dee2e6;'>
+            <table style='width: 100%; border-collapse: collapse; font-family: Poppins, sans-serif;'>
+                <thead>
+                    <tr style='background: linear-gradient(135deg, #007BFF, #0056b3); color: white;'>
+                        <th style='padding: 12px 15px; text-align: left; position: sticky; top: 0; background: #007BFF;'>#</th>
+                        <th style='padding: 12px 15px; text-align: left; position: sticky; top: 0; background: #007BFF;'>Código</th>
+                        <th style='padding: 12px 15px; text-align: left; position: sticky; top: 0; background: #007BFF;'>Actividad</th>
+                        <th style='padding: 12px 15px; text-align: right; position: sticky; top: 0; background: #007BFF;'>Horas Registradas</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {filas_html}
+                </tbody>
+            </table>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            st.markdown("<br>", unsafe_allow_html=True)
+            
+            # Botón para cerrar el reporte
+            if st.button("❌ Cerrar Reporte", type="secondary"):
+                st.session_state.mostrar_reporte_general = False
+                st.rerun()
+        
+        return  # No mostrar el resto de la pantalla cuando está el reporte activo
     
     # Obtener lista de OPs
     lista_ops, mensaje = obtener_lista_ops()
