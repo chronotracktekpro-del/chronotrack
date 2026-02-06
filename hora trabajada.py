@@ -946,16 +946,28 @@ def calcular_horas_conteo_diario(empleado_cedula, fecha_registro, hora_registro,
     
     else:
         # REGISTRO ADICIONAL DEL DÍA - Contar desde última hora_exacta del día
+        hora_limite = time(16, 30, 0)  # Límite máximo 16:30
+        
         if ultima_hora_exacta:
             try:
                 ultima_hora_obj = datetime.strptime(ultima_hora_exacta, '%H:%M:%S').time()
+                # Aplicar límite de 16:30 a la última hora (por si hay datos históricos)
+                if ultima_hora_obj > hora_limite:
+                    ultima_hora_obj = hora_limite
             except:
                 # Si falla el parsing, usar 7 AM como fallback
                 ultima_hora_obj = hora_inicio_dia
         else:
             ultima_hora_obj = hora_inicio_dia
         
-        tiempo_trabajado = calcular_horas(ultima_hora_obj, hora_actual_exacta)
+        # Validar que la hora actual no sea menor o igual a la última hora
+        # (evita horas negativas o 0 si ya se registró al límite)
+        if hora_actual_exacta <= ultima_hora_obj:
+            print(f"⚠️ [ALERTA] La hora actual ({hora_actual_exacta}) no es mayor a la última hora registrada ({ultima_hora_obj})")
+            print(f"   Se registrará 0 horas ya que no hay tiempo adicional.")
+            tiempo_trabajado = 0
+        else:
+            tiempo_trabajado = calcular_horas(ultima_hora_obj, hora_actual_exacta)
         
         print(f"🔄 [REGISTRO ADICIONAL DEL DÍA]")
         print(f"   📅 Fecha: {fecha_registro}")
@@ -1996,8 +2008,133 @@ def obtener_color_estado_barra(progreso):
             'color_texto': '#721c24'
         }
 
-def obtener_actividades_servicio():
-    """Obtener todas las actividades del sheet Servicio con horas registradas"""
+def obtener_nombres_empleados_registros():
+    """Obtener lista de nombres únicos de empleados del sheet Registros"""
+    try:
+        spreadsheet, mensaje = conectar_google_sheets()
+        if spreadsheet is None:
+            return []
+        
+        worksheet_registros = spreadsheet.worksheet('Registros')
+        registros_values = worksheet_registros.get_all_values()
+        
+        if len(registros_values) < 2:
+            return []
+        
+        headers_reg = registros_values[0]
+        rows_reg = registros_values[1:]
+        
+        # Buscar índice de la columna Nombre
+        idx_nombre = None
+        for i, header in enumerate(headers_reg):
+            if header.lower().strip() == 'nombre':
+                idx_nombre = i
+                break
+        
+        if idx_nombre is None:
+            return []
+        
+        # Obtener nombres únicos
+        nombres = set()
+        for row in rows_reg:
+            if len(row) > idx_nombre:
+                nombre = str(row[idx_nombre]).strip()
+                if nombre:
+                    nombres.add(nombre)
+        
+        return sorted(list(nombres))
+    except:
+        return []
+
+def obtener_horas_por_dia_empleado(nombre_empleado, fecha_inicio=None, fecha_fin=None):
+    """Obtener las horas trabajadas por día para un empleado específico"""
+    HORAS_ESPERADAS = 8.833
+    try:
+        spreadsheet, mensaje = conectar_google_sheets()
+        if spreadsheet is None:
+            return [], HORAS_ESPERADAS
+        
+        worksheet_registros = spreadsheet.worksheet('Registros')
+        registros_values = worksheet_registros.get_all_values()
+        
+        if len(registros_values) < 2:
+            return [], HORAS_ESPERADAS
+        
+        headers_reg = registros_values[0]
+        rows_reg = registros_values[1:]
+        
+        # Buscar índices
+        idx_nombre = None
+        idx_fecha = None
+        idx_tiempo = None
+        for i, header in enumerate(headers_reg):
+            header_lower = header.lower().strip()
+            if header_lower == 'nombre':
+                idx_nombre = i
+            if header_lower == 'fecha':
+                idx_fecha = i
+            if header_lower == 'tiempo [hr]' or header_lower == 'tiempo':
+                idx_tiempo = i
+        
+        if idx_nombre is None or idx_fecha is None or idx_tiempo is None:
+            return [], HORAS_ESPERADAS
+        
+        # Agrupar horas por día
+        horas_por_dia = {}
+        for row in rows_reg:
+            if len(row) > max(idx_nombre, idx_fecha, idx_tiempo):
+                nombre_reg = str(row[idx_nombre]).strip()
+                if nombre_reg.lower() != nombre_empleado.lower():
+                    continue
+                
+                fecha_str = str(row[idx_fecha]).strip()
+                tiempo_str = str(row[idx_tiempo]).strip().replace(',', '.')
+                
+                # Parsear fecha
+                fecha_registro = None
+                try:
+                    fecha_registro = datetime.strptime(fecha_str, '%d/%m/%Y').date()
+                except:
+                    try:
+                        fecha_registro = datetime.strptime(fecha_str, '%Y-%m-%d').date()
+                    except:
+                        continue
+                
+                # Filtrar por rango de fechas
+                if fecha_inicio and fecha_fin:
+                    if fecha_registro < fecha_inicio or fecha_registro > fecha_fin:
+                        continue
+                
+                # Parsear tiempo
+                try:
+                    tiempo = float(tiempo_str) if tiempo_str else 0
+                except:
+                    tiempo = 0
+                
+                # Acumular por día
+                if fecha_registro not in horas_por_dia:
+                    horas_por_dia[fecha_registro] = 0
+                horas_por_dia[fecha_registro] += tiempo
+        
+        # Convertir a lista ordenada por fecha
+        resultado = []
+        for fecha, horas in sorted(horas_por_dia.items()):
+            diferencia = horas - HORAS_ESPERADAS
+            estado = 'normal' if abs(diferencia) < 0.01 else ('exceso' if diferencia > 0 else 'faltante')
+            resultado.append({
+                'fecha': fecha,
+                'horas': round(horas, 3),
+                'diferencia': round(diferencia, 3),
+                'estado': estado
+            })
+        
+        return resultado, HORAS_ESPERADAS
+    except Exception as e:
+        print(f"Error obteniendo horas por día: {e}")
+        return [], HORAS_ESPERADAS
+
+def obtener_actividades_servicio(fecha_inicio=None, fecha_fin=None, nombre_empleado=None):
+    """Obtener todas las actividades del sheet Servicio con horas registradas, opcionalmente filtradas por rango de fechas y nombre"""
     try:
         spreadsheet, mensaje = conectar_google_sheets()
         if spreadsheet is None:
@@ -2038,19 +2175,49 @@ def obtener_actividades_servicio():
                 headers_reg = registros_values[0]
                 rows_reg = registros_values[1:]
                 
-                # Buscar índices de Actividad y Tiempo [Hr]
+                # Buscar índices de Actividad, Tiempo [Hr], Fecha y Nombre
                 idx_actividad_reg = None
                 idx_tiempo = None
+                idx_fecha = None
+                idx_nombre = None
                 for i, header in enumerate(headers_reg):
                     header_lower = header.lower().strip()
                     if header_lower == 'actividad':
                         idx_actividad_reg = i
                     if header_lower == 'tiempo [hr]' or header_lower == 'tiempo':
                         idx_tiempo = i
+                    if header_lower == 'fecha':
+                        idx_fecha = i
+                    if header_lower == 'nombre':
+                        idx_nombre = i
                 
                 if idx_actividad_reg is not None and idx_tiempo is not None:
                     for row in rows_reg:
                         if len(row) > max(idx_actividad_reg, idx_tiempo):
+                            # Filtrar por nombre si se especificó
+                            if nombre_empleado is not None and nombre_empleado != "" and idx_nombre is not None:
+                                nombre_reg = str(row[idx_nombre]).strip() if len(row) > idx_nombre else ''
+                                if nombre_reg.lower() != nombre_empleado.lower():
+                                    continue  # Saltar registros de otros empleados
+                            
+                            # Filtrar por fecha si se especificó rango
+                            if fecha_inicio is not None and fecha_fin is not None and idx_fecha is not None:
+                                fecha_str = str(row[idx_fecha]).strip() if len(row) > idx_fecha else ''
+                                if fecha_str:
+                                    try:
+                                        # Intentar parsear la fecha (formato dd/mm/yyyy)
+                                        fecha_registro = datetime.strptime(fecha_str, '%d/%m/%Y').date()
+                                        if fecha_registro < fecha_inicio or fecha_registro > fecha_fin:
+                                            continue  # Saltar registros fuera del rango
+                                    except:
+                                        try:
+                                            # Intentar formato yyyy-mm-dd
+                                            fecha_registro = datetime.strptime(fecha_str, '%Y-%m-%d').date()
+                                            if fecha_registro < fecha_inicio or fecha_registro > fecha_fin:
+                                                continue
+                                        except:
+                                            pass  # Si no se puede parsear, incluir el registro
+                            
                             actividad_reg = str(row[idx_actividad_reg]).strip()
                             tiempo_str = str(row[idx_tiempo]).strip().replace(',', '.')
                             try:
@@ -2157,8 +2324,180 @@ def pantalla_avance_proyecto():
         </div>
         """, unsafe_allow_html=True)
         
-        # Obtener actividades del sheet Servicio
-        actividades, msg = obtener_actividades_servicio()
+        # ===== FILTRO DE RANGO DE FECHAS =====
+        st.markdown("""
+        <div style='
+            background: #f8f9fa;
+            padding: 15px 20px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            border: 1px solid #dee2e6;
+        '>
+            <span style='font-weight: 600; color: #495057;'>Filtrar por rango de fechas:</span>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        col_fecha1, col_fecha2, col_fecha3 = st.columns([1, 1, 1])
+        
+        # Valores por defecto: último mes
+        fecha_hoy = obtener_fecha_colombia()
+        fecha_inicio_default = fecha_hoy.replace(day=1)  # Primer día del mes actual
+        
+        with col_fecha1:
+            fecha_inicio = st.date_input(
+                "Fecha Inicio",
+                value=fecha_inicio_default,
+                format="DD/MM/YYYY",
+                key="reporte_fecha_inicio"
+            )
+        
+        with col_fecha2:
+            fecha_fin = st.date_input(
+                "Fecha Fin",
+                value=fecha_hoy,
+                format="DD/MM/YYYY",
+                key="reporte_fecha_fin"
+            )
+        
+        with col_fecha3:
+            st.markdown("<br>", unsafe_allow_html=True)
+            filtrar_todo = st.checkbox("Mostrar todo (sin filtro de fecha)", value=False, key="reporte_sin_filtro")
+        
+        # ===== FILTRO POR NOMBRE DE EMPLEADO =====
+        st.markdown("""
+        <div style='
+            background: #f8f9fa;
+            padding: 15px 20px;
+            border-radius: 10px;
+            margin: 15px 0;
+            border: 1px solid #dee2e6;
+        '>
+            <span style='font-weight: 600; color: #495057;'>👤 Filtrar por empleado:</span>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Obtener lista de nombres de empleados
+        lista_nombres = obtener_nombres_empleados_registros()
+        opciones_nombres = ["-- Todos los empleados --"] + lista_nombres
+        
+        col_nombre1, col_nombre2 = st.columns([2, 1])
+        with col_nombre1:
+            nombre_seleccionado = st.selectbox(
+                "Seleccionar empleado",
+                options=opciones_nombres,
+                index=0,
+                key="reporte_nombre_empleado"
+            )
+        
+        # Determinar si hay filtro de nombre
+        filtro_nombre = None if nombre_seleccionado == "-- Todos los empleados --" else nombre_seleccionado
+        
+        # Validar que fecha inicio no sea mayor que fecha fin
+        if fecha_inicio > fecha_fin:
+            st.error("La fecha de inicio no puede ser mayor que la fecha de fin")
+            return
+        
+        # Mostrar rango seleccionado
+        if not filtrar_todo:
+            filtro_fecha_texto = f"del <strong>{fecha_inicio.strftime('%d/%m/%Y')}</strong> al <strong>{fecha_fin.strftime('%d/%m/%Y')}</strong>"
+        else:
+            filtro_fecha_texto = "<strong>todas las fechas</strong>"
+        
+        if filtro_nombre:
+            filtro_nombre_texto = f"de <strong>{filtro_nombre}</strong>"
+        else:
+            filtro_nombre_texto = "de <strong>todos los empleados</strong>"
+        
+        st.markdown(f"""
+        <div style='
+            background: linear-gradient(135deg, #E3F2FD 0%, #BBDEFB 100%);
+            padding: 10px 15px;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            text-align: center;
+        '>
+            <span style='color: #1565C0;'>📊 Mostrando registros {filtro_fecha_texto} {filtro_nombre_texto}</span>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # ===== ALERTA DE HORAS POR DÍA (solo cuando hay filtro de nombre) =====
+        if filtro_nombre:
+            if filtrar_todo:
+                horas_dia, horas_esperadas = obtener_horas_por_dia_empleado(filtro_nombre)
+            else:
+                horas_dia, horas_esperadas = obtener_horas_por_dia_empleado(filtro_nombre, fecha_inicio, fecha_fin)
+            
+            if horas_dia:
+                # Verificar si hay días con diferencias
+                dias_con_diferencia = [d for d in horas_dia if d['estado'] != 'normal']
+                
+                if dias_con_diferencia:
+                    st.markdown(f"""
+                    <div style='
+                        background: linear-gradient(135deg, #FFF3E0 0%, #FFE0B2 100%);
+                        padding: 15px 20px;
+                        border-radius: 10px;
+                        margin-bottom: 15px;
+                        border-left: 5px solid #FF9800;
+                    '>
+                        <h4 style='color: #E65100; margin: 0 0 10px 0;'>⚠️ Alerta de Horas - Meta diaria: {horas_esperadas} hrs</h4>
+                        <p style='color: #795548; margin: 0 0 10px 0; font-size: 14px;'>Se encontraron días con horas diferentes a la meta:</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    # Crear tabla de alertas
+                    alertas_html = ""
+                    for dia in dias_con_diferencia:
+                        fecha_format = dia['fecha'].strftime('%d/%m/%Y')
+                        if dia['estado'] == 'exceso':
+                            icono = "🟢"  # Verde - exceso
+                            color_bg = "#E8F5E9"
+                            color_text = "#2E7D32"
+                            diferencia_texto = f"+{dia['diferencia']:.3f} hrs de más"
+                        else:  # faltante
+                            icono = "🔴"  # Rojo - faltante
+                            color_bg = "#FFEBEE"
+                            color_text = "#C62828"
+                            diferencia_texto = f"{dia['diferencia']:.3f} hrs (faltan {abs(dia['diferencia']):.3f})"
+                        
+                        alertas_html += f"<tr style='background: {color_bg};'><td style='padding: 8px 12px;'>{icono}</td><td style='padding: 8px 12px; font-weight: 600;'>{fecha_format}</td><td style='padding: 8px 12px;'>{dia['horas']:.3f} hrs</td><td style='padding: 8px 12px; color: {color_text}; font-weight: 600;'>{diferencia_texto}</td></tr>"
+                    
+                    st.markdown(f"""
+                    <div style='max-height: 200px; overflow-y: auto; border-radius: 8px; border: 1px solid #FFE0B2; margin-bottom: 20px;'>
+                    <table style='width: 100%; border-collapse: collapse; font-family: Poppins, sans-serif; font-size: 14px;'>
+                        <thead>
+                            <tr style='background: #FF9800; color: white;'>
+                                <th style='padding: 10px 12px; text-align: left; width: 40px;'></th>
+                                <th style='padding: 10px 12px; text-align: left;'>Fecha</th>
+                                <th style='padding: 10px 12px; text-align: left;'>Horas Registradas</th>
+                                <th style='padding: 10px 12px; text-align: left;'>Diferencia</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {alertas_html}
+                        </tbody>
+                    </table>
+                    </div>
+                    """, unsafe_allow_html=True)
+                else:
+                    # Todos los días están bien
+                    st.markdown(f"""
+                    <div style='
+                        background: linear-gradient(135deg, #E8F5E9 0%, #C8E6C9 100%);
+                        padding: 15px 20px;
+                        border-radius: 10px;
+                        margin-bottom: 15px;
+                        border-left: 5px solid #4CAF50;
+                    '>
+                        <span style='color: #2E7D32;'>✅ <strong>{filtro_nombre}</strong> tiene todas las horas correctas ({horas_esperadas} hrs/día) en el período seleccionado</span>
+                    </div>
+                    """, unsafe_allow_html=True)
+        
+        # Obtener actividades del sheet Servicio (con filtros)
+        if filtrar_todo:
+            actividades, msg = obtener_actividades_servicio(nombre_empleado=filtro_nombre)
+        else:
+            actividades, msg = obtener_actividades_servicio(fecha_inicio, fecha_fin, filtro_nombre)
         
         if not actividades:
             st.warning(f"⚠️ No se encontraron actividades: {msg}")
@@ -3591,7 +3930,7 @@ Esto evita registros duplicados accidentales.""")
         
 Se crearán **DOS registros**:
 1. **OP {op_info.get('orden', 'seleccionada')}** - hasta las {info_adecuacion['hora_actual_real'].strftime('%H:%M')}
-2. **Adecuación Locativa** - desde {info_adecuacion['hora_actual_real'].strftime('%H:%M')} hasta {info_adecuacion['hora_cierre_str']} ({info_adecuacion['tiempo_adecuacion']:.3f}h)
+2. **ADECUACION LOCATIVA** - desde {info_adecuacion['hora_actual_real'].strftime('%H:%M')} hasta {info_adecuacion['hora_cierre_str']} ({info_adecuacion['tiempo_adecuacion']:.3f}h)
         """)
     
     # NUEVA LÓGICA DE CONTEOS DIARIOS
@@ -3727,8 +4066,8 @@ Se crearán **DOS registros**:
                     'codigo_producto': 'N/A',
                     'cantidades': 'N/A',
                     'nombre_cliente': 'N/A',
-                    'descripcion_op': 'Adecuación Locativa',
-                    'descripcion_proceso': 'Produccion',
+                    'descripcion_op': 'ADECUACIÓN LOCATIVA',
+                    'descripcion_proceso': 'PRODUCCIÓN',
                     'hora_entrada': hora_actual,  # Desde la hora actual (ej: 16:25)
                     'hora_salida': hora_cierre,  # Hasta la hora de cierre (ej: 16:30)
                     'tiempo_horas': info_adecuacion['tiempo_adecuacion'],  # Tiempo calculado (ej: 0.083h = 5 min)
@@ -3754,8 +4093,8 @@ Se crearán **DOS registros**:
                     'codigo_producto': 'N/A',
                     'cantidades': 'N/A',
                     'nombre_cliente': 'N/A',
-                    'descripcion_op': 'Adecuación Locativa',
-                    'descripcion_proceso': 'Produccion',
+                    'descripcion_op': 'ADECUACIÓN LOCATIVA',
+                    'descripcion_proceso': 'PRODUCCIÓN',
                     'hora_salida': hora_cierre.strftime('%H:%M:%S'),
                     'horas_trabajadas': info_adecuacion['tiempo_adecuacion'],
                     'hora_exacta': hora_cierre.strftime('%H:%M:%S'),
