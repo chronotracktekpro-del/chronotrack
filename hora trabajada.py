@@ -16,12 +16,26 @@ def obtener_hora_colombia():
     """Obtener la hora actual en zona horaria de Colombia (UTC-5)"""
     return datetime.now(COLOMBIA_TZ)
 
-def obtener_hora_colombia_time():
-    """Obtener solo el objeto time en zona horaria de Colombia, con límite máximo de 16:30"""
-    hora_actual = obtener_hora_colombia().time()
-    hora_limite = time(16, 30, 0)  # 16:30:00
+def obtener_hora_limite_dia(fecha=None):
+    """Obtener la hora límite según el día de la semana.
+    Viernes (weekday=4): 15:30
+    Otros días: 16:30
+    """
+    if fecha is None:
+        fecha = obtener_fecha_colombia()
     
-    # Si la hora actual es mayor a 16:30, devolver 16:30
+    # weekday(): 0=Lunes, 1=Martes, 2=Miércoles, 3=Jueves, 4=Viernes, 5=Sábado, 6=Domingo
+    if fecha.weekday() == 4:  # Viernes
+        return time(15, 30, 0)  # 15:30:00
+    else:
+        return time(16, 30, 0)  # 16:30:00
+
+def obtener_hora_colombia_time():
+    """Obtener solo el objeto time en zona horaria de Colombia, con límite máximo según el día"""
+    hora_actual = obtener_hora_colombia().time()
+    hora_limite = obtener_hora_limite_dia()  # 15:30 viernes, 16:30 otros días
+    
+    # Si la hora actual es mayor al límite, devolver el límite
     if hora_actual > hora_limite:
         return hora_limite
     
@@ -484,7 +498,7 @@ def load_config():
                 'hora_fin': '16:00',     # Hasta las 4:00 PM
                 'hora_registro': '15:30'  # Se registra como 3:30 PM
             },
-            'servicio_nombre': 'Adecuación Locativa',
+            'servicio_nombre': 'ADECUACIÓN LOCATIVA',
             'servicio_codigo': '29'   # Código del servicio
         }
     }
@@ -555,7 +569,7 @@ def es_horario_adecuacion_locativa():
         return False, None
     
     try:
-        servicio_nombre = adecuacion.get('servicio_nombre', 'Adecuación Locativa')
+        servicio_nombre = adecuacion.get('servicio_nombre', 'ADECUACIÓN LOCATIVA')
         servicio_codigo = adecuacion.get('servicio_codigo', '29')
         
         # Determinar horarios según el día
@@ -620,8 +634,8 @@ def obtener_servicio_adecuacion_locativa():
     
     return {
         'numero': adecuacion.get('servicio_codigo', '99'),
-        'nomservicio': adecuacion.get('servicio_nombre', 'Adecuación Locativa'),
-        'display': f"{adecuacion.get('servicio_codigo', '99')} - {adecuacion.get('servicio_nombre', 'Adecuación Locativa')}"
+        'nomservicio': adecuacion.get('servicio_nombre', 'ADECUACIÓN LOCATIVA'),
+        'display': f"{adecuacion.get('servicio_codigo', '99')} - {adecuacion.get('servicio_nombre', 'ADECUACIÓN LOCATIVA')}"
     }
 
 def validar_codigo_barras(codigo):
@@ -946,7 +960,8 @@ def calcular_horas_conteo_diario(empleado_cedula, fecha_registro, hora_registro,
     
     else:
         # REGISTRO ADICIONAL DEL DÍA - Contar desde última hora_exacta del día
-        hora_limite = time(16, 30, 0)  # Límite máximo 16:30
+        # Obtener límite según el día (viernes=15:30, otros=16:30)
+        hora_limite = obtener_hora_limite_dia(fecha_registro)
         
         if ultima_hora_exacta:
             try:
@@ -2233,18 +2248,62 @@ def obtener_actividades_servicio(fecha_inicio=None, fecha_fin=None, nombre_emple
             print(f"Error al obtener horas de Registros: {e}")
         
         # ===== CREAR LISTA DE ACTIVIDADES CON HORAS =====
-        actividades = []
+        # Función para normalizar texto (quitar tildes y convertir a minúsculas)
+        import unicodedata
+        def normalizar_texto(texto):
+            """Normaliza texto: minúsculas y sin tildes"""
+            texto = str(texto).lower().strip()
+            # Normalizar Unicode y quitar acentos
+            texto = unicodedata.normalize('NFD', texto)
+            texto = ''.join(c for c in texto if unicodedata.category(c) != 'Mn')
+            return texto
+        
+        # Crear mapa de actividades normalizadas para comparación
+        actividades_servicio_normalizadas = {}
         for row in rows:
             if len(row) > idx_actividad:
                 actividad = str(row[idx_actividad]).strip()
                 numero = str(row[idx_numero]).strip() if idx_numero is not None and len(row) > idx_numero else ''
-                if actividad:  # Solo agregar si tiene actividad
-                    horas = horas_por_actividad.get(actividad, 0)
+                if actividad:
+                    actividades_servicio_normalizadas[normalizar_texto(actividad)] = {
+                        'numero': numero,
+                        'actividad': actividad
+                    }
+        
+        # Normalizar horas_por_actividad para comparación
+        horas_por_actividad_normalizado = {}
+        for act, horas in horas_por_actividad.items():
+            act_normalizado = normalizar_texto(act)
+            if act_normalizado not in horas_por_actividad_normalizado:
+                horas_por_actividad_normalizado[act_normalizado] = {'horas': 0, 'nombre_original': act}
+            horas_por_actividad_normalizado[act_normalizado]['horas'] += horas
+        
+        actividades = []
+        actividades_ya_agregadas = set()
+        
+        # Primero agregar actividades del sheet Servicio
+        for row in rows:
+            if len(row) > idx_actividad:
+                actividad = str(row[idx_actividad]).strip()
+                numero = str(row[idx_numero]).strip() if idx_numero is not None and len(row) > idx_numero else ''
+                if actividad:
+                    act_normalizado = normalizar_texto(actividad)
+                    horas = horas_por_actividad_normalizado.get(act_normalizado, {}).get('horas', 0)
                     actividades.append({
                         'numero': numero,
                         'actividad': actividad,
                         'horas': round(horas, 2)
                     })
+                    actividades_ya_agregadas.add(act_normalizado)
+        
+        # Luego agregar actividades de Registros que NO están en Servicio
+        for act_normalizado, info in horas_por_actividad_normalizado.items():
+            if act_normalizado not in actividades_ya_agregadas:
+                actividades.append({
+                    'numero': '?',  # No tiene código porque no está en Servicio
+                    'actividad': f"{info['nombre_original']} (no en Servicio)",
+                    'horas': round(info['horas'], 2)
+                })
         
         return actividades, "OK"
         
@@ -3476,7 +3535,7 @@ def mostrar_paso_actividad():
                         'referencia': 'N/A',
                         'cantidades': 'N/A',
                         'cliente': 'N/A',
-                        'item': 'Servicio directo'
+                        'item': 'SERVICIO DIRECTO'
                     }
                     
                     # Mostrar mensaje especial y saltar directo al paso 4
@@ -3994,7 +4053,7 @@ Se crearán **DOS registros**:
         'cantidades': str(op_info.get('cantidades', '')).strip(),
         'nombre_cliente': str(op_info.get('cliente', '')).strip(),
         'descripcion_op': str(item_formateado).strip(),
-        'descripcion_proceso': 'Produccion',
+        'descripcion_proceso': 'PRODUCCION',
         'hora_salida': hora_fin_str,  # Siempre guardar la hora de fin del conteo
         'horas_trabajadas': conteo_resultado['tiempo_trabajado'],  # Tiempo trabajado calculado
         'hora_exacta': conteo_resultado['hora_exacta_registro'],  # Hora exacta del registro calculada
@@ -4028,7 +4087,7 @@ Se crearán **DOS registros**:
                 'cantidades': str(op_info.get('cantidades', '')).strip(),
                 'nombre_cliente': str(op_info.get('cliente', '')).strip(),
                 'descripcion_op': str(item_formateado).strip(),
-                'descripcion_proceso': 'Produccion',
+                'descripcion_proceso': 'PRODUCCION',
                 'hora_entrada': conteo_resultado['hora_inicio_conteo'],
                 'hora_salida': conteo_resultado['hora_fin_conteo'],
                 'tiempo_horas': conteo_resultado['tiempo_trabajado'],
@@ -4273,7 +4332,7 @@ def guardar_en_google_sheets_simple(registro):
             str(registro.get('descripcion_op', '')),  # Item
             float(tiempo_horas_calculado) if tiempo_horas_calculado else 0,  # Tiempo [Hr] - como número para evitar apóstrofe
             str(registro.get('op_info', {}).get('cantidades', registro.get('cantidades', ''))),  # Cantidades (de OPS)
-            str(registro.get('descripcion_proceso', 'Produccion')),  # Proceso
+            str(registro.get('descripcion_proceso', 'PRODUCCION')),  # Proceso
             str(registro.get('mes', '')),  # Mes
             str(registro.get('año', '')),  # Año
             str(registro.get('semana', '')),  # Semana
@@ -4358,7 +4417,7 @@ def guardar_en_google_sheets(registro):
                 str(registro.get('op_info', {}).get('item', '')),  # Item (descripción de la OP)
                 float(tiempo_horas_calculado) if tiempo_horas_calculado else 0,  # Tiempo [Hr] - como número para evitar apóstrofe
                 str(registro.get('op_info', {}).get('cantidades', registro.get('cantidades', ''))),  # Cantidades (de OPS)
-                'Produccion',  # Proceso (sin acento para consistencia)
+                'PRODUCCION',  # Proceso (sin acento para consistencia)
                 str(registro.get('mes', fecha_obj.strftime('%m'))),  # Mes
                 str(registro.get('año', fecha_obj.strftime('%Y'))),  # Año
                 str(registro.get('semana', str(fecha_obj.isocalendar()[1]))),  # Semana
