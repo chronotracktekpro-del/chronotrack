@@ -3081,25 +3081,69 @@ def componente_escaner_codigo(key_prefix, placeholder_text, label_text):
                         }}
                         
                         if (targetInput) {{
+                            // Focus primero
+                            targetInput.focus();
+                            
                             // Usar el setter nativo para que React detecte el cambio
                             const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.parent.HTMLInputElement.prototype, 'value').set;
                             nativeInputValueSetter.call(targetInput, codigo);
                             
-                            // Disparar eventos
-                            targetInput.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                            // Disparar eventos de input para React
+                            const inputEvent = new InputEvent('input', {{
+                                bubbles: true,
+                                cancelable: true,
+                                inputType: 'insertText',
+                                data: codigo
+                            }});
+                            targetInput.dispatchEvent(inputEvent);
                             targetInput.dispatchEvent(new Event('change', {{ bubbles: true }}));
                             
-                            // Focus y simulación de Enter
-                            targetInput.focus();
-                            
-                            setTimeout(() => {{
-                                targetInput.dispatchEvent(new KeyboardEvent('keydown', {{
+                            // Función para simular Enter completo
+                            function simularEnter() {{
+                                const enterEvent = new KeyboardEvent('keydown', {{
                                     key: 'Enter',
                                     code: 'Enter',
                                     keyCode: 13,
                                     which: 13,
-                                    bubbles: true
-                                }}));
+                                    bubbles: true,
+                                    cancelable: true
+                                }});
+                                targetInput.dispatchEvent(enterEvent);
+                                
+                                const keypressEvent = new KeyboardEvent('keypress', {{
+                                    key: 'Enter',
+                                    code: 'Enter',
+                                    keyCode: 13,
+                                    which: 13,
+                                    bubbles: true,
+                                    cancelable: true
+                                }});
+                                targetInput.dispatchEvent(keypressEvent);
+                                
+                                const keyupEvent = new KeyboardEvent('keyup', {{
+                                    key: 'Enter',
+                                    code: 'Enter',
+                                    keyCode: 13,
+                                    which: 13,
+                                    bubbles: true,
+                                    cancelable: true
+                                }});
+                                targetInput.dispatchEvent(keyupEvent);
+                            }}
+                            
+                            // Simular Enter después de un breve delay
+                            setTimeout(() => {{
+                                simularEnter();
+                                
+                                // Si no funcionó, intentar blur para forzar el procesamiento
+                                setTimeout(() => {{
+                                    targetInput.blur();
+                                    // Re-focus y enter de nuevo
+                                    setTimeout(() => {{
+                                        targetInput.focus();
+                                        simularEnter();
+                                    }}, 100);
+                                }}, 200);
                             }}, 300);
                             
                             return true;
