@@ -2921,6 +2921,284 @@ def obtener_logo_base64():
     except:
         return None
 
+def componente_escaner_codigo(key_prefix, placeholder_text, label_text):
+    """
+    Componente reutilizable para escanear códigos con cámara o entrada manual.
+    
+    Args:
+        key_prefix: Prefijo único para las keys de session_state
+        placeholder_text: Texto del placeholder del input
+        label_text: Texto de la etiqueta del input
+    
+    Returns:
+        El código escaneado/ingresado o None
+    """
+    # Keys únicas para este componente
+    camara_key = f'mostrar_camara_{key_prefix}'
+    input_key = f'codigo_{key_prefix}'
+    
+    # Inicializar estado de cámara si no existe
+    if camara_key not in st.session_state:
+        st.session_state[camara_key] = False
+    
+    # Botones para alternar entre cámara y manual
+    col1, col2 = st.columns([1, 1])
+    
+    with col1:
+        if st.button("📷 Escanear con Cámara", use_container_width=True, type="primary", key=f"btn_camara_{key_prefix}"):
+            st.session_state[camara_key] = True
+            st.rerun()
+    
+    with col2:
+        if st.button("⌨️ Ingresar Manual", use_container_width=True, key=f"btn_manual_{key_prefix}"):
+            st.session_state[camara_key] = False
+            st.rerun()
+    
+    codigo_resultado = None
+    
+    if st.session_state.get(camara_key, False):
+        # Mostrar interfaz de cámara
+        st.markdown("""
+        <div style='background: linear-gradient(135deg, #3EAEA5 0%, #5BC4BC 100%); padding: 20px; border-radius: 15px; margin: 20px 0;'>
+            <h3 style='color: white; text-align: center; margin-bottom: 15px;'>📷 Escáner de Código de Barras</h3>
+            <p style='color: white; text-align: center;'>Coloca el código de barras frente a la cámara</p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Componente HTML5 para acceso a cámara y escaneo de códigos de barras
+        components.html(f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <script src="https://unpkg.com/@zxing/library@latest"></script>
+            <style>
+                body {{ margin: 0; padding: 20px; background: #f0f2f6; font-family: Arial, sans-serif; }}
+                #video-container {{ position: relative; max-width: 100%; margin: 0 auto; }}
+                #video {{ width: 100%; max-height: 400px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }}
+                #result {{ 
+                    margin-top: 20px; 
+                    padding: 15px; 
+                    background: #28a745; 
+                    color: white; 
+                    border-radius: 10px; 
+                    font-size: 18px;
+                    text-align: center;
+                    display: none;
+                }}
+                #codigo-detectado {{
+                    margin-top: 15px;
+                    padding: 20px;
+                    background: #e8f5e9;
+                    border: 3px solid #4caf50;
+                    border-radius: 10px;
+                    font-size: 24px;
+                    font-weight: bold;
+                    text-align: center;
+                    color: #2e7d32;
+                    display: none;
+                }}
+                #loading {{ text-align: center; color: #666; padding: 20px; }}
+                .error {{ background: #dc3545 !important; }}
+                #copiar-btn {{
+                    margin-top: 10px;
+                    padding: 12px 25px;
+                    background: #3EAEA5;
+                    color: white;
+                    border: none;
+                    border-radius: 8px;
+                    font-size: 16px;
+                    cursor: pointer;
+                    display: none;
+                }}
+                #copiar-btn:hover {{ background: #2D8B84; }}
+                #instrucciones {{
+                    margin-top: 15px;
+                    padding: 15px;
+                    background: #fff3cd;
+                    border-radius: 8px;
+                    color: #856404;
+                    text-align: center;
+                    display: none;
+                }}
+            </style>
+        </head>
+        <body>
+            <div id="loading">Iniciando cámara...</div>
+            <div id="video-container" style="display:none;">
+                <video id="video" playsinline></video>
+            </div>
+            <div id="result"></div>
+            <div id="codigo-detectado"></div>
+            <button id="copiar-btn" onclick="copiarCodigo()">📋 Copiar Código</button>
+            <div id="instrucciones">
+                <strong>👆 Copia el código y pégalo en el campo de abajo</strong><br>
+                <small>Luego presiona Enter para continuar</small>
+            </div>
+            
+            <script>
+                const codeReader = new ZXing.BrowserMultiFormatReader();
+                const videoElement = document.getElementById('video');
+                const resultElement = document.getElementById('result');
+                const loadingElement = document.getElementById('loading');
+                const videoContainer = document.getElementById('video-container');
+                const codigoDetectado = document.getElementById('codigo-detectado');
+                const copiarBtn = document.getElementById('copiar-btn');
+                const instrucciones = document.getElementById('instrucciones');
+                
+                let ultimoCodigo = '';
+                
+                function copiarCodigo() {{
+                    if (ultimoCodigo) {{
+                        navigator.clipboard.writeText(ultimoCodigo).then(() => {{
+                            copiarBtn.textContent = '✅ Copiado!';
+                            setTimeout(() => {{
+                                copiarBtn.textContent = '📋 Copiar Código';
+                            }}, 2000);
+                        }});
+                    }}
+                }}
+                
+                // Función mejorada para escribir código en el input de Streamlit
+                function escribirEnInputStreamlit(codigo) {{
+                    try {{
+                        const parentDoc = window.parent.document;
+                        
+                        // Buscar todos los inputs de texto visibles
+                        const allInputs = parentDoc.querySelectorAll('input[type="text"]');
+                        let targetInput = null;
+                        
+                        for (let inp of allInputs) {{
+                            // Verificar que el input sea visible y no esté dentro del iframe
+                            const rect = inp.getBoundingClientRect();
+                            if (rect.width > 0 && rect.height > 0 && !inp.closest('iframe')) {{
+                                // Verificar que no sea un input del header o sidebar
+                                const parent = inp.closest('[data-testid="stForm"], [data-testid="stVerticalBlock"], .stTextInput');
+                                if (parent) {{
+                                    targetInput = inp;
+                                    break;
+                                }}
+                            }}
+                        }}
+                        
+                        if (targetInput) {{
+                            // Usar el setter nativo para que React detecte el cambio
+                            const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.parent.HTMLInputElement.prototype, 'value').set;
+                            nativeInputValueSetter.call(targetInput, codigo);
+                            
+                            // Disparar eventos
+                            targetInput.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                            targetInput.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                            
+                            // Focus y simulación de Enter
+                            targetInput.focus();
+                            
+                            setTimeout(() => {{
+                                targetInput.dispatchEvent(new KeyboardEvent('keydown', {{
+                                    key: 'Enter',
+                                    code: 'Enter',
+                                    keyCode: 13,
+                                    which: 13,
+                                    bubbles: true
+                                }}));
+                            }}, 300);
+                            
+                            return true;
+                        }}
+                    }} catch (e) {{
+                        console.error('Error escribiendo en input:', e);
+                    }}
+                    return false;
+                }}
+                
+                // Iniciar escaneo
+                codeReader.decodeFromVideoDevice(null, videoElement, (result, err) => {{
+                    if (result) {{
+                        const codigo = result.text;
+                        ultimoCodigo = codigo;
+                        
+                        resultElement.textContent = '✅ Código detectado!';
+                        resultElement.style.display = 'block';
+                        resultElement.classList.remove('error');
+                        
+                        // Mostrar código grande para copiar
+                        codigoDetectado.textContent = codigo;
+                        codigoDetectado.style.display = 'block';
+                        copiarBtn.style.display = 'inline-block';
+                        instrucciones.style.display = 'block';
+                        
+                        // Intentar escribir en el input de Streamlit
+                        const exito = escribirEnInputStreamlit(codigo);
+                        
+                        if (exito) {{
+                            resultElement.textContent = '✅ Código enviado automáticamente!';
+                            instrucciones.innerHTML = '<strong style="color: #28a745;">✅ El código se envió automáticamente</strong>';
+                        }}
+                        
+                        // Detener escaneo después de detectar
+                        setTimeout(() => {{
+                            codeReader.reset();
+                        }}, 3000);
+                    }}
+                    
+                    if (err && !(err instanceof ZXing.NotFoundException)) {{
+                        console.error(err);
+                    }}
+                }}).then(() => {{
+                    loadingElement.style.display = 'none';
+                    videoContainer.style.display = 'block';
+                }}).catch(err => {{
+                    loadingElement.textContent = '❌ Error al acceder a la cámara. Por favor, da permisos de cámara.';
+                    loadingElement.style.color = '#dc3545';
+                    console.error(err);
+                }});
+            </script>
+        </body>
+        </html>
+        """, height=600)
+        
+        # Campo para ingresar el código copiado
+        st.markdown("<p style='text-align: center; color: #666; margin-top: 10px;'>Si no se envió automáticamente, pega el código aquí:</p>", unsafe_allow_html=True)
+        
+        codigo_resultado = st.text_input(
+            label_text,
+            key=f"{input_key}_camara",
+            placeholder="Pega el código escaneado aquí y presiona Enter...",
+            help="El código detectado por la cámara se pegará aquí"
+        )
+    else:
+        # Campo optimizado para lectores USB
+        st.markdown('<div class="barcode-scanner-field">', unsafe_allow_html=True)
+        codigo_resultado = st.text_input(
+            label_text,
+            placeholder=placeholder_text,
+            key=input_key,
+            help="✅ Optimizado para lectores USB\n🔍 El código aparecerá automáticamente\n⚡ Procesamiento instantáneo",
+            label_visibility="collapsed"
+        )
+        st.markdown('</div>', unsafe_allow_html=True)
+        
+        # Auto-enfoque para escáner
+        components.html(f"""
+        <script>
+        function focusInput() {{
+            var inputs = parent.document.querySelectorAll('input[type="text"]');
+            for (var inp of inputs) {{
+                if (inp.placeholder && inp.placeholder.includes('{placeholder_text[:20]}')) {{
+                    inp.focus();
+                    inp.select();
+                    break;
+                }}
+            }}
+        }}
+        
+        focusInput();
+        setTimeout(focusInput, 100);
+        setTimeout(focusInput, 500);
+        </script>
+        """, height=0)
+    
+    return codigo_resultado
+
 def pantalla_inicio():
     """Pantalla inicial de la aplicación con diseño Tekpro estilo tarjeta"""
     
@@ -3075,437 +3353,13 @@ def mostrar_paso_cedula():
     </div>
     """, unsafe_allow_html=True)
     
-    # Detectar si es un dispositivo móvil y mostrar opción de cámara
-    st.markdown("""
-    <script>
-    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-    if (isMobile) {
-        window.parent.postMessage({type: 'streamlit:setComponentValue', value: true}, '*');
-    }
-    </script>
-    """, unsafe_allow_html=True)
+    # Usar componente reutilizable de escaneo
+    codigo_barras = componente_escaner_codigo(
+        key_prefix="cedula",
+        placeholder_text="● ● ● Campo listo para escanear ● ● ●",
+        label_text="🔍 Código de barras:"
+    )
     
-    # Botón para abrir cámara en móviles
-    col1, col2 = st.columns([1, 1])
-    
-    with col1:
-        if st.button("📷 Escanear con Cámara", use_container_width=True, type="primary"):
-            st.session_state['mostrar_camara'] = True
-    
-    with col2:
-        if st.button("⌨️ Ingresar Manual", use_container_width=True):
-            st.session_state['mostrar_camara'] = False
-    
-    # Inicializar estado
-    if 'mostrar_camara' not in st.session_state:
-        st.session_state['mostrar_camara'] = False
-    
-    codigo_barras = None
-    
-    # Mostrar interfaz de cámara o campo de texto según la selección
-    if st.session_state.get('mostrar_camara', False):
-        st.markdown("""
-        <div style='background: linear-gradient(135deg, #3EAEA5 0%, #5BC4BC 100%); padding: 20px; border-radius: 15px; margin: 20px 0;'>
-            <h3 style='color: white; text-align: center; margin-bottom: 15px;'>📷 Escáner de Código de Barras</h3>
-            <p style='color: white; text-align: center;'>Coloca el código de barras frente a la cámara</p>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        # Componente HTML5 para acceso a cámara y escaneo de códigos de barras
-        components.html("""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <script src="https://unpkg.com/@zxing/library@latest"></script>
-            <style>
-                body { margin: 0; padding: 20px; background: #f0f2f6; font-family: Arial, sans-serif; }
-                #video-container { position: relative; max-width: 100%; margin: 0 auto; }
-                #video { width: 100%; max-height: 400px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
-                #result { 
-                    margin-top: 20px; 
-                    padding: 15px; 
-                    background: #28a745; 
-                    color: white; 
-                    border-radius: 10px; 
-                    font-size: 18px;
-                    text-align: center;
-                    display: none;
-                }
-                #loading { text-align: center; color: #666; padding: 20px; }
-                .error { background: #dc3545 !important; }
-            </style>
-        </head>
-        <body>
-            <div id="loading">Iniciando cámara...</div>
-            <div id="video-container" style="display:none;">
-                <video id="video" playsinline></video>
-            </div>
-            <div id="result"></div>
-            
-            <script>
-                const codeReader = new ZXing.BrowserMultiFormatReader();
-                const videoElement = document.getElementById('video');
-                const resultElement = document.getElementById('result');
-                const loadingElement = document.getElementById('loading');
-                const videoContainer = document.getElementById('video-container');
-                
-                // Función para escribir código en el input de Streamlit
-                function escribirEnInputStreamlit(codigo) {
-                    try {
-                        // Buscar el input en el documento padre (Streamlit)
-                        const parentDoc = window.parent.document;
-                        const selectors = [
-                            'input[data-testid="stTextInput"]',
-                            'input[aria-label*="Código"]',
-                            'input[placeholder*="escaneado"]',
-                            '.stTextInput input',
-                            'input[type="text"]'
-                        ];
-                        
-                        let input = null;
-                        for (let selector of selectors) {
-                            const inputs = parentDoc.querySelectorAll(selector);
-                            for (let inp of inputs) {
-                                // Buscar input visible que no sea el del iframe
-                                if (inp.offsetParent !== null) {
-                                    input = inp;
-                                    break;
-                                }
-                            }
-                            if (input) break;
-                        }
-                        
-                        if (input) {
-                            // Simular escritura en el input
-                            input.value = codigo;
-                            input.focus();
-                            
-                            // Disparar eventos para que Streamlit detecte el cambio
-                            input.dispatchEvent(new Event('input', { bubbles: true }));
-                            input.dispatchEvent(new Event('change', { bubbles: true }));
-                            
-                            // Simular Enter para procesar automáticamente
-                            setTimeout(() => {
-                                input.dispatchEvent(new KeyboardEvent('keydown', {
-                                    key: 'Enter',
-                                    code: 'Enter',
-                                    keyCode: 13,
-                                    which: 13,
-                                    bubbles: true
-                                }));
-                            }, 500);
-                            
-                            return true;
-                        }
-                    } catch (e) {
-                        console.error('Error escribiendo en input:', e);
-                    }
-                    return false;
-                }
-                
-                // Iniciar escaneo
-                codeReader.decodeFromVideoDevice(null, videoElement, (result, err) => {
-                    if (result) {
-                        const codigo = result.text;
-                        resultElement.textContent = '✅ Código detectado: ' + codigo;
-                        resultElement.style.display = 'block';
-                        resultElement.classList.remove('error');
-                        
-                        // Escribir directamente en el input de Streamlit
-                        const exito = escribirEnInputStreamlit(codigo);
-                        
-                        if (exito) {
-                            resultElement.textContent = '✅ Código enviado: ' + codigo;
-                        } else {
-                            resultElement.innerHTML = '✅ Código: <strong>' + codigo + '</strong><br><small>Cópialo manualmente si no aparece</small>';
-                        }
-                        
-                        // Detener escaneo después de detectar
-                        setTimeout(() => {
-                            codeReader.reset();
-                        }, 2000);
-                    }
-                    
-                    if (err && !(err instanceof ZXing.NotFoundException)) {
-                        console.error(err);
-                    }
-                }).then(() => {
-                    loadingElement.style.display = 'none';
-                    videoContainer.style.display = 'block';
-                }).catch(err => {
-                    loadingElement.textContent = '❌ Error al acceder a la cámara. Por favor, da permisos de cámara.';
-                    loadingElement.style.color = '#dc3545';
-                    console.error(err);
-                });
-            </script>
-        </body>
-        </html>
-        """, height=550)
-        
-        # Campo para mostrar el código escaneado
-        st.markdown("<p style='text-align: center; color: #666; margin-top: 10px;'>El código aparecerá automáticamente abajo:</p>", unsafe_allow_html=True)
-        
-        codigo_barras = st.text_input(
-            "📱 Código escaneado:",
-            key="codigo_camara",
-            placeholder="El código aparecerá aquí automáticamente...",
-            help="El código detectado por la cámara se escribirá aquí"
-        )
-    else:
-        # Campo optimizado para lectores USB
-        st.markdown('<div class="barcode-scanner-field">', unsafe_allow_html=True)
-        codigo_barras = st.text_input(
-            "🔍 Código de barras:",
-            placeholder="● ● ● Campo listo para escanear ● ● ●",
-            key="codigo_input",
-            help="✅ Optimizado para lectores USB\n🔍 El código aparecerá automáticamente\n⚡ Procesamiento instantáneo",
-            label_visibility="collapsed"
-        )
-        st.markdown('</div>', unsafe_allow_html=True)
-    
-    # Auto-enfoque para escáner
-    components.html("""
-    <script>
-    function focusInput() {
-        // Buscar el input por múltiples criterios
-        var selectors = [
-            'input[data-testid="textInput-codigo_input"]',
-            'input[placeholder*="Campo listo para escanear"]',
-            'input[aria-label*="Código de barras"]',
-            'input[key="codigo_input"]'
-        ];
-        
-        for (var i = 0; i < selectors.length; i++) {
-            var input = parent.document.querySelector(selectors[i]);
-            if (input) {
-                input.focus();
-                input.select();
-                break;
-            }
-        }
-    }
-    
-    // Intentar enfocar inmediatamente y luego repetir
-    focusInput();
-    setTimeout(focusInput, 100);
-    setTimeout(focusInput, 500);
-    </script>
-    """, height=0)
-    
-    # JavaScript para auto-focus y detección de escaneo
-    st.markdown("""
-    <script>
-    let lastScanTime = 0;
-    let scanBuffer = '';
-    
-    function focusBarcodeField() {
-        const inputs = window.parent.document.querySelectorAll('input[aria-label*="Código de barras"]');
-        if (inputs.length > 0) {
-            inputs[0].focus();
-            inputs[0].select();
-            return inputs[0];
-        }
-        return null;
-    }
-    
-    function detectScan() {
-        const input = focusBarcodeField();
-        if (input && !input.hasEventListener) {
-            input.addEventListener('input', function(e) {
-                const currentTime = Date.now();
-                const timeDiff = currentTime - lastScanTime;
-                
-                // Si el tiempo entre caracteres es muy corto, probablemente es un escáner
-                if (timeDiff < 50 && e.target.value.length > 3) {
-                    // Marcar visualmente que se detectó un escaneo
-                    e.target.style.backgroundColor = '#d4edda';
-                    e.target.style.borderColor = '#28a745';
-                }
-                
-                lastScanTime = currentTime;
-            });
-            
-            input.hasEventListener = true;
-        }
-    }
-    
-    // Auto-focus inicial
-    setTimeout(focusBarcodeField, 500);
-    setTimeout(detectScan, 600);
-    
-    // Mantener el campo activo
-    setInterval(() => {
-        focusBarcodeField();
-        detectScan();
-    }, 2000);
-    </script>
-    """, unsafe_allow_html=True)
-    
-    # Selector de servicio en un expander
-    servicio_seleccionado = None
-        
-    if codigo_barras:
-        # Validar formato del código de barras
-        es_valido, tipo_codigo = validar_codigo_barras(codigo_barras)
-        
-        if es_valido:
-            st.success(f"**Código detectado:** {tipo_codigo}")
-            
-            with st.spinner("Buscando colaborador..."):
-                empleado, mensaje_gs = buscar_colaborador_en_datos_colab(codigo_barras)
-            
-            if empleado is None:
-                empleado = buscar_empleado_por_codigo(codigo_barras)
-                if empleado:
-                    mensaje_gs = "Colaborador encontrado en configuración local"
-            
-            if empleado:
-                # 🔍 BUSCAR ÚLTIMO REGISTRO EN GOOGLE SHEETS
-                with st.spinner("📊 Analizando último registro en Google Sheets..."):
-                    ultimo_registro_sheets, mensaje_registro = obtener_ultimo_registro_sheets(codigo_barras)
-                
-                hora_exacta_anterior = None
-                diferencia_horas = None
-                
-                if ultimo_registro_sheets:
-                    hora_exacta_anterior = ultimo_registro_sheets['hora_exacta']
-                    
-                    # Calcular diferencia entre hora actual y hora_exacta anterior
-                    try:
-                        hora_actual = obtener_hora_colombia()
-                        # Parsear hora_exacta anterior (formato esperado: HH:MM:SS)
-                        if ':' in hora_exacta_anterior:
-                            partes = hora_exacta_anterior.split(':')
-                            if len(partes) >= 2:
-                                hora_anterior_time = time(int(partes[0]), int(partes[1]), int(partes[2]) if len(partes) > 2 else 0)
-                                # Convertir a datetime para calcular diferencia
-                                hora_anterior_dt = datetime.combine(date.today(), hora_anterior_time)
-                                
-                                # Calcular diferencia en horas
-                                diferencia = hora_actual - hora_anterior_dt
-                                diferencia_horas = diferencia.total_seconds() / 3600
-                                
-                                # Si la diferencia es negativa, significa que el registro anterior fue ayer
-                                if diferencia_horas < 0:
-                                    diferencia_horas += 24  # Agregar 24 horas
-                    except Exception as e:
-                        st.warning(f"No se pudo calcular la diferencia de tiempo: {str(e)}")
-                
-                st.markdown(f"""
-                <div class='success-message'>
-                    <strong>Colaborador encontrado:</strong> {empleado}<br>
-                    <small>{mensaje_gs}</small>
-                </div>
-                """, unsafe_allow_html=True)
-                
-                # 🏠 VERIFICAR SI ES HORARIO DE ADECUACIÓN LOCATIVA (4:20 PM - 5:00 PM)
-                es_adecuacion, info_adecuacion = es_horario_adecuacion_locativa()
-                if es_adecuacion and info_adecuacion:
-                    st.markdown(f"""
-                    <div style='background: linear-gradient(135deg, #E8F5E9 0%, #C8E6C9 100%); 
-                                padding: 15px; border-radius: 12px; border-left: 5px solid #4CAF50; margin: 10px 0;'>
-                        <strong>🏠 Horario de Adecuación Locativa Detectado</strong><br>
-                        <span style='font-size: 16px; color: #2E7D32;'>
-                            Se crearán <strong>2 registros</strong>:
-                        </span><br>
-                        <span style='font-size: 14px; color: #388E3C;'>
-                            1️⃣ <strong>Tu OP</strong> - hasta las {info_adecuacion['hora_actual_real'].strftime('%H:%M')}
-                        </span><br>
-                        <span style='font-size: 14px; color: #388E3C;'>
-                            2️⃣ <strong>{info_adecuacion['servicio_nombre']}</strong> - desde {info_adecuacion['hora_actual_real'].strftime('%H:%M')} hasta {info_adecuacion['hora_cierre_str']} ({info_adecuacion['tiempo_adecuacion']:.3f}h)
-                        </span><br>
-                        <small style='color: #666;'>La OP se registra con tu hora real, y automáticamente se agrega Adecuación Locativa hasta las {info_adecuacion['hora_cierre_str']}</small>
-                    </div>
-                    """, unsafe_allow_html=True)
-                
-                # Mostrar información del último registro si existe
-                if hora_exacta_anterior and diferencia_horas is not None:
-                    st.markdown(f"""
-                    <div class='info-message'>
-                        <strong>Último Registro Encontrado</strong><br>
-                        <strong>Hora exacta anterior:</strong> {hora_exacta_anterior}<br>
-                        <strong>Tiempo transcurrido:</strong> {diferencia_horas:.2f} horas ({int(diferencia_horas * 60)} minutos)<br>
-                        <small>{mensaje_registro}</small>
-                    </div>
-                    """, unsafe_allow_html=True)
-                    
-                    # GUARDAR LA DIFERENCIA EN SESSION_STATE PARA USAR EN EL GUARDADO
-                    st.session_state.tiempo_calculado = round(diferencia_horas, 2)
-                else:
-                    st.info(f"{mensaje_registro}")
-                    st.session_state.tiempo_calculado = 0  # Sin registro previo, tiempo es 0
-                
-                # Incluir información del servicio si está seleccionado
-                servicio_info = servicio_seleccionado['display'] if servicio_seleccionado else None
-                tipo_registro, horas_totales, analisis = registrar_entrada_salida(empleado, codigo_barras, servicio_info)
-                
-                if tipo_registro == 'actividad_registrada':
-                    # Determinar estilo según el análisis
-                    if not analisis.get('es_dia_laboral'):
-                        mensaje_class = 'info-message'
-                        estado_texto = 'Actividad registrada (Día no laboral)'
-                    else:
-                        mensaje_class = 'success-message'
-                        estado_texto = 'Nueva actividad registrada'
-                    
-                    # Obtener información adicional sobre el día
-                    df_actual = load_data()
-                    registros_hoy = df_actual[
-                        (df_actual['empleado'] == empleado) & 
-                        (df_actual['fecha'] == obtener_fecha_colombia())
-                    ]
-                    
-                    actividad_html = f"""
-                    <div class='{mensaje_class}'>
-                        <strong>{estado_texto}</strong><br>
-                        Empleado: {empleado}<br>
-                        Fecha: {obtener_fecha_colombia().strftime('%d/%m/%Y')}<br>
-                        Hora registro: {obtener_hora_colombia().strftime('%H:%M:%S')}<br>
-                        <strong>Inicio del día: 07:00 AM</strong><br>
-                        <strong>Horas transcurridas hoy: {horas_totales:.2f}h</strong><br>
-                        <strong>Total actividades: {len(registros_hoy)}</strong>
-                    """
-                    
-                    if servicio_seleccionado:
-                        actividad_html += f"<br>🔧 Servicio: {servicio_seleccionado['display']}"
-                    
-                    # Agregar información del horario laboral
-                    if analisis.get('es_dia_laboral'):
-                        actividad_html += f"<br>📅 Horario esperado: {analisis['hora_entrada_esperada'].strftime('%H:%M')}"
-                        if analisis.get('entrada_mensaje'):
-                            actividad_html += f"<br><small>ℹ️ {analisis['entrada_mensaje']}</small>"
-                    
-                    # Mostrar actividades anteriores del día
-                    if len(registros_hoy) > 0:
-                        actividad_html += "<br><br><strong>📊 Resumen del día:</strong>"
-                        for i, registro in enumerate(registros_hoy.iterrows()):
-                            reg = registro[1]
-                            if pd.notna(reg['horas_trabajadas']) and reg['horas_trabajadas'] != '':
-                                actividad_html += f"<br>• Actividad {i+1}: {reg['horas_trabajadas']:.1f}h"
-                                if reg['servicio']:
-                                    actividad_html += f" - {reg['servicio']}"
-                    
-                    actividad_html += "</div>"
-                    
-                    st.markdown(actividad_html, unsafe_allow_html=True)
-                
-                
-                
-            else:
-                st.markdown(f"""
-                <div class='error-message'>
-                    <strong>❌ Colaborador no encontrado</strong><br>
-                    Código: {codigo_barras}<br>
-                    {mensaje_gs}
-                </div>
-                """, unsafe_allow_html=True)
-                
-                st.info("💡 **Sugerencias:**\n- Verifica que el código sea correcto\n- Contacta al administrador para registrar tu código")
-        else:
-            # Código no válido
-            st.error(f"❌ **Formato de código inválido:** {tipo_codigo}")
-            st.warning("⚠️ **Posibles soluciones:**\n- Asegúrate de escanear completamente el código\n- Verifica que el lector esté configurado correctamente\n- Intenta escanear nuevamente")
-        
     # Procesar código de barras si se ingresó
     if codigo_barras:
         # Validar y buscar empleado
@@ -3543,37 +3397,12 @@ def mostrar_paso_actividad():
     </div>
     """, unsafe_allow_html=True)
     
-    codigo_actividad = st.text_input(
-        "🔧 Código de actividad:",
-        placeholder="● ● ● Escanea código de actividad ● ● ●",
-        key="codigo_actividad_input"
+    # Usar componente reutilizable de escaneo
+    codigo_actividad = componente_escaner_codigo(
+        key_prefix="actividad",
+        placeholder_text="● ● ● Escanea código de actividad ● ● ●",
+        label_text="🔧 Código de actividad:"
     )
-    
-    # Auto-enfoque para escáner
-    components.html("""
-    <script>
-    function focusInput() {
-        var selectors = [
-            'input[data-testid="textInput-codigo_actividad_input"]',
-            'input[placeholder*="Escanea código de actividad"]',
-            'input[aria-label*="Código de actividad"]'
-        ];
-        
-        for (var i = 0; i < selectors.length; i++) {
-            var input = parent.document.querySelector(selectors[i]);
-            if (input) {
-                input.focus();
-                input.select();
-                break;
-            }
-        }
-    }
-    
-    focusInput();
-    setTimeout(focusInput, 100);
-    setTimeout(focusInput, 500);
-    </script>
-    """, height=0)
     
     # Mostrar información del servicio encontrado
     if 'servicio_info' in st.session_state.empleado_data:
@@ -3588,7 +3417,7 @@ def mostrar_paso_actividad():
     
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("← Anterior", type="secondary"):
+        if st.button("← Anterior", type="secondary", key="btn_anterior_paso2"):
             st.session_state.step = 1
             st.rerun()
     
@@ -3688,37 +3517,12 @@ def mostrar_paso_op():
     </div>
     """, unsafe_allow_html=True)
     
-    codigo_op = st.text_input(
-        "📋 Código de OP:",
-        placeholder="● ● ● Escanea código de OP ● ● ●",
-        key="codigo_op_input"
+    # Usar componente reutilizable de escaneo
+    codigo_op = componente_escaner_codigo(
+        key_prefix="op",
+        placeholder_text="● ● ● Escanea código de OP ● ● ●",
+        label_text="📋 Código de OP:"
     )
-    
-    # Auto-enfoque para escáner
-    components.html("""
-    <script>
-    function focusInput() {
-        var selectors = [
-            'input[data-testid="textInput-codigo_op_input"]',
-            'input[placeholder*="Escanea código de OP"]',
-            'input[aria-label*="Código de OP"]'
-        ];
-        
-        for (var i = 0; i < selectors.length; i++) {
-            var input = parent.document.querySelector(selectors[i]);
-            if (input) {
-                input.focus();
-                input.select();
-                break;
-            }
-        }
-    }
-    
-    focusInput();
-    setTimeout(focusInput, 100);
-    setTimeout(focusInput, 500);
-    </script>
-    """, height=0)
     
     # Mostrar información de la OP encontrada
     if 'op_info' in st.session_state.empleado_data:
@@ -3736,7 +3540,7 @@ def mostrar_paso_op():
     
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("← Anterior", type="secondary"):
+        if st.button("← Anterior", type="secondary", key="btn_anterior_paso3"):
             st.session_state.step = 2
             st.rerun()
     
@@ -3762,7 +3566,7 @@ def mostrar_paso_op():
             st.warning("💡 Verifica que el código de OP esté registrado en la hoja 'OPS'")
             
             # Mostrar opción para continuar sin OP
-            if st.button("Continuar sin OP →", type="secondary"):
+            if st.button("Continuar sin OP →", type="secondary", key="btn_continuar_sin_op"):
                 st.session_state.empleado_data['codigo_op'] = codigo_op
                 st.session_state.empleado_data['op_info'] = {
                     'orden': codigo_op,
