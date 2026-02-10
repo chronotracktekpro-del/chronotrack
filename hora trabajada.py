@@ -5,6 +5,7 @@ from datetime import datetime, time, date, timedelta, timezone
 import calendar
 import os
 import json
+import base64
 import gspread
 from google.oauth2.service_account import Credentials
 
@@ -2910,16 +2911,35 @@ def pantalla_avance_proyecto():
             </div>
             """, unsafe_allow_html=True)
 
+def obtener_logo_base64():
+    """Obtener el logo de Tekpro como base64 para incrustar en HTML"""
+    try:
+        logo_path = os.path.join(os.path.dirname(__file__), 'tekpro_logo.png')
+        with open(logo_path, 'rb') as f:
+            logo_data = f.read()
+        return base64.b64encode(logo_data).decode('utf-8')
+    except:
+        return None
+
 def pantalla_inicio():
     """Pantalla inicial de la aplicación con diseño Tekpro estilo tarjeta"""
+    
+    # Obtener logo como base64
+    logo_base64 = obtener_logo_base64()
     
     col1, col2, col3 = st.columns([1, 2, 1])
     
     with col2:
-        st.markdown("""
+        # Construir el HTML del logo
+        if logo_base64:
+            logo_html = f"<img src='data:image/png;base64,{logo_base64}' style='height: 100px; margin-bottom: 20px; filter: drop-shadow(0 4px 15px rgba(0,0,0,0.3));' alt='Tekpro Logo'/>"
+        else:
+            logo_html = "<div style='font-family: Poppins, sans-serif; font-size: 24px; font-weight: 700; color: white; letter-spacing: 6px; text-shadow: 0 4px 20px rgba(0,0,0,0.8); margin-bottom: 10px; background: #3EAEA5; padding: 8px 25px; border-radius: 8px;'>TEKPRO</div>"
+        
+        st.markdown(f"""
         <div style='background: white; border-radius: 25px; overflow: hidden; box-shadow: 0 20px 60px rgba(62, 174, 165, 0.2); margin-top: 50px;'>
-            <div style='height: 180px; background: linear-gradient(135deg, #2D8B84 0%, #3EAEA5 25%, #5BC4BC 50%, #7DD4CE 75%, #A8E6E1 100%); display: flex; flex-direction: column; align-items: center; justify-content: center; position: relative;'>
-                <div style='font-family: Poppins, sans-serif; font-size: 24px; font-weight: 700; color: white; letter-spacing: 6px; text-shadow: 0 4px 20px rgba(0,0,0,0.8); margin-bottom: 10px; background: #3EAEA5; padding: 8px 25px; border-radius: 8px;'>TEKPRO</div>
+            <div style='height: 220px; background: linear-gradient(135deg, #2D8B84 0%, #3EAEA5 25%, #5BC4BC 50%, #7DD4CE 75%, #A8E6E1 100%); display: flex; flex-direction: column; align-items: center; justify-content: center; position: relative;'>
+                {logo_html}
                 <div style='font-family: Poppins, sans-serif; font-size: 52px; font-weight: 700; color: white; letter-spacing: 12px; text-shadow: 0 6px 25px rgba(0,0,0,0.8); background: #2D8B84; padding: 15px 40px; border-radius: 12px;'>CHRONOTRACK</div>
             </div>
             <div style='padding: 40px; text-align: center; background: white;'>
@@ -3129,6 +3149,60 @@ def mostrar_paso_cedula():
                 const loadingElement = document.getElementById('loading');
                 const videoContainer = document.getElementById('video-container');
                 
+                // Función para escribir código en el input de Streamlit
+                function escribirEnInputStreamlit(codigo) {
+                    try {
+                        // Buscar el input en el documento padre (Streamlit)
+                        const parentDoc = window.parent.document;
+                        const selectors = [
+                            'input[data-testid="stTextInput"]',
+                            'input[aria-label*="Código"]',
+                            'input[placeholder*="escaneado"]',
+                            '.stTextInput input',
+                            'input[type="text"]'
+                        ];
+                        
+                        let input = null;
+                        for (let selector of selectors) {
+                            const inputs = parentDoc.querySelectorAll(selector);
+                            for (let inp of inputs) {
+                                // Buscar input visible que no sea el del iframe
+                                if (inp.offsetParent !== null) {
+                                    input = inp;
+                                    break;
+                                }
+                            }
+                            if (input) break;
+                        }
+                        
+                        if (input) {
+                            // Simular escritura en el input
+                            input.value = codigo;
+                            input.focus();
+                            
+                            // Disparar eventos para que Streamlit detecte el cambio
+                            input.dispatchEvent(new Event('input', { bubbles: true }));
+                            input.dispatchEvent(new Event('change', { bubbles: true }));
+                            
+                            // Simular Enter para procesar automáticamente
+                            setTimeout(() => {
+                                input.dispatchEvent(new KeyboardEvent('keydown', {
+                                    key: 'Enter',
+                                    code: 'Enter',
+                                    keyCode: 13,
+                                    which: 13,
+                                    bubbles: true
+                                }));
+                            }, 500);
+                            
+                            return true;
+                        }
+                    } catch (e) {
+                        console.error('Error escribiendo en input:', e);
+                    }
+                    return false;
+                }
+                
                 // Iniciar escaneo
                 codeReader.decodeFromVideoDevice(null, videoElement, (result, err) => {
                     if (result) {
@@ -3137,11 +3211,14 @@ def mostrar_paso_cedula():
                         resultElement.style.display = 'block';
                         resultElement.classList.remove('error');
                         
-                        // Enviar código a Streamlit
-                        window.parent.postMessage({
-                            type: 'streamlit:setComponentValue',
-                            value: codigo
-                        }, '*');
+                        // Escribir directamente en el input de Streamlit
+                        const exito = escribirEnInputStreamlit(codigo);
+                        
+                        if (exito) {
+                            resultElement.textContent = '✅ Código enviado: ' + codigo;
+                        } else {
+                            resultElement.innerHTML = '✅ Código: <strong>' + codigo + '</strong><br><small>Cópialo manualmente si no aparece</small>';
+                        }
                         
                         // Detener escaneo después de detectar
                         setTimeout(() => {
@@ -3165,11 +3242,14 @@ def mostrar_paso_cedula():
         </html>
         """, height=550)
         
-        # Campo oculto para recibir el código escaneado
+        # Campo para mostrar el código escaneado
+        st.markdown("<p style='text-align: center; color: #666; margin-top: 10px;'>El código aparecerá automáticamente abajo:</p>", unsafe_allow_html=True)
+        
         codigo_barras = st.text_input(
-            "Código escaneado:",
+            "📱 Código escaneado:",
             key="codigo_camara",
-            label_visibility="collapsed"
+            placeholder="El código aparecerá aquí automáticamente...",
+            help="El código detectado por la cámara se escribirá aquí"
         )
     else:
         # Campo optimizado para lectores USB
