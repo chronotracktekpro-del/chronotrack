@@ -53,6 +53,7 @@ def obtener_fecha_colombia():
 # ============================================
 
 ARCHIVO_REGISTROS_PENDIENTES = 'registros_pendientes.json'
+ARCHIVO_CACHE_DATOS = 'cache_datos_offline.json'
 
 def verificar_conexion_internet(timeout=3):
     """
@@ -128,6 +129,190 @@ def limpiar_registros_pendientes():
     if os.path.exists(ARCHIVO_REGISTROS_PENDIENTES):
         with open(ARCHIVO_REGISTROS_PENDIENTES, 'w', encoding='utf-8') as f:
             json.dump([], f)
+
+# ============================================
+# SISTEMA DE CACHÉ PARA MODO OFFLINE
+# Guarda copia local de Colaboradores, Servicios y OPs
+# ============================================
+
+def obtener_cache_datos():
+    """Obtener datos del caché local"""
+    if os.path.exists(ARCHIVO_CACHE_DATOS):
+        try:
+            with open(ARCHIVO_CACHE_DATOS, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except:
+            return {'colaboradores': [], 'servicios': [], 'ops': [], 'ultima_actualizacion': None}
+    return {'colaboradores': [], 'servicios': [], 'ops': [], 'ultima_actualizacion': None}
+
+def guardar_cache_datos(datos):
+    """Guardar datos en el caché local"""
+    datos['ultima_actualizacion'] = datetime.now(COLOMBIA_TZ).strftime('%Y-%m-%d %H:%M:%S')
+    with open(ARCHIVO_CACHE_DATOS, 'w', encoding='utf-8') as f:
+        json.dump(datos, f, ensure_ascii=False, indent=2)
+
+def actualizar_cache_colaboradores(registros):
+    """Actualizar caché de colaboradores"""
+    cache = obtener_cache_datos()
+    cache['colaboradores'] = registros
+    guardar_cache_datos(cache)
+
+def actualizar_cache_servicios(registros):
+    """Actualizar caché de servicios"""
+    cache = obtener_cache_datos()
+    cache['servicios'] = registros
+    guardar_cache_datos(cache)
+
+def actualizar_cache_ops(registros):
+    """Actualizar caché de OPs"""
+    cache = obtener_cache_datos()
+    cache['ops'] = registros
+    guardar_cache_datos(cache)
+
+def buscar_colaborador_en_cache(codigo_barras):
+    """Buscar colaborador en el caché local"""
+    cache = obtener_cache_datos()
+    colaboradores = cache.get('colaboradores', [])
+    
+    for colab in colaboradores:
+        cedula = str(colab.get('cedula', '')).strip()
+        if cedula == str(codigo_barras).strip():
+            nombre = colab.get('nombre', '')
+            if nombre:
+                return nombre, "Colaborador encontrado (modo offline)"
+    
+    return None, "Colaborador no encontrado en caché local"
+
+def buscar_servicio_en_cache(codigo_barras):
+    """Buscar servicio en el caché local"""
+    cache = obtener_cache_datos()
+    servicios = cache.get('servicios', [])
+    
+    for servicio in servicios:
+        codigo = str(servicio.get('codigo', '')).strip()
+        if codigo == str(codigo_barras).strip():
+            actividad = servicio.get('actividad', '')
+            if actividad:
+                return codigo, actividad, "Servicio encontrado (modo offline)"
+    
+    return None, None, "Servicio no encontrado en caché local"
+
+def buscar_op_en_cache(codigo_barras):
+    """Buscar OP en el caché local"""
+    cache = obtener_cache_datos()
+    ops = cache.get('ops', [])
+    
+    for op in ops:
+        orden = str(op.get('orden', '')).strip()
+        if orden == str(codigo_barras).strip():
+            return {
+                'orden': op.get('orden', ''),
+                'referencia': op.get('referencia', ''),
+                'cantidades': op.get('cantidades', ''),
+                'cliente': op.get('cliente', ''),
+                'item': op.get('item', '')
+            }, "OP encontrada (modo offline)"
+    
+    return None, "OP no encontrada en caché local"
+
+def actualizar_todo_cache_desde_sheets():
+    """
+    Actualiza todo el caché descargando datos de Google Sheets.
+    Retorna: (exito: bool, mensaje: str)
+    """
+    tiene_conexion, _ = verificar_conexion_internet(timeout=3)
+    if not tiene_conexion:
+        return False, "Sin conexión a internet"
+    
+    try:
+        spreadsheet, mensaje = conectar_google_sheets()
+        if not spreadsheet:
+            return False, f"Error conectando: {mensaje}"
+        
+        cache = obtener_cache_datos()
+        
+        # 1. Actualizar colaboradores
+        try:
+            ws_colab = spreadsheet.worksheet('Datos_colab')
+            all_values = ws_colab.get_all_values()
+            if len(all_values) > 1:
+                headers = [h.strip().lower() for h in all_values[0]]
+                colaboradores = []
+                for row in all_values[1:]:
+                    if len(row) >= 2:
+                        colab = {}
+                        for i, h in enumerate(headers):
+                            if i < len(row):
+                                colab[h] = row[i]
+                        # Normalizar claves
+                        colab_normalizado = {
+                            'cedula': colab.get('cedula', colab.get('codigo', '')),
+                            'nombre': colab.get('nombre', colab.get('empleado', ''))
+                        }
+                        if colab_normalizado['cedula']:
+                            colaboradores.append(colab_normalizado)
+                cache['colaboradores'] = colaboradores
+        except Exception as e:
+            print(f"Error actualizando colaboradores: {e}")
+        
+        # 2. Actualizar servicios
+        try:
+            ws_serv = spreadsheet.worksheet('Servicio')
+            all_values = ws_serv.get_all_values()
+            if len(all_values) > 1:
+                headers = [h.strip().lower() for h in all_values[0]]
+                servicios = []
+                for row in all_values[1:]:
+                    if len(row) >= 2:
+                        serv = {}
+                        for i, h in enumerate(headers):
+                            if i < len(row):
+                                serv[h] = row[i]
+                        # Normalizar claves
+                        serv_normalizado = {
+                            'codigo': serv.get('codigo', ''),
+                            'actividad': serv.get('actividad', serv.get('descripcion', ''))
+                        }
+                        if serv_normalizado['codigo']:
+                            servicios.append(serv_normalizado)
+                cache['servicios'] = servicios
+        except Exception as e:
+            print(f"Error actualizando servicios: {e}")
+        
+        # 3. Actualizar OPs
+        try:
+            ws_ops = spreadsheet.worksheet('OPS')
+            all_values = ws_ops.get_all_values()
+            if len(all_values) > 1:
+                headers = [h.strip().lower() for h in all_values[0]]
+                ops = []
+                for row in all_values[1:]:
+                    if len(row) >= 1:
+                        op = {}
+                        for i, h in enumerate(headers):
+                            if i < len(row):
+                                op[h] = row[i]
+                        # Normalizar claves
+                        op_normalizado = {
+                            'orden': op.get('orden', op.get('op', '')),
+                            'referencia': op.get('referencia', ''),
+                            'cantidades': op.get('cantidades', op.get('cantidad', '')),
+                            'cliente': op.get('cliente', ''),
+                            'item': op.get('item', op.get('descripcion', ''))
+                        }
+                        if op_normalizado['orden']:
+                            ops.append(op_normalizado)
+                cache['ops'] = ops
+        except Exception as e:
+            print(f"Error actualizando OPs: {e}")
+        
+        guardar_cache_datos(cache)
+        
+        total = len(cache.get('colaboradores', [])) + len(cache.get('servicios', [])) + len(cache.get('ops', []))
+        return True, f"Caché actualizado: {len(cache.get('colaboradores', []))} colaboradores, {len(cache.get('servicios', []))} servicios, {len(cache.get('ops', []))} OPs"
+        
+    except Exception as e:
+        return False, f"Error actualizando caché: {str(e)}"
 
 def sincronizar_registros_pendientes_silencioso():
     """
@@ -1600,10 +1785,32 @@ def verificar_registros_del_dia_en_sheets(cedula, fecha_actual):
         return [], True, None  # En caso de error, asumir primer registro
 
 def buscar_colaborador_en_datos_colab(codigo_barras):
-    """Buscar colaborador en la hoja 'Datos_colab' de Google Sheets"""
+    """Buscar colaborador en la hoja 'Datos_colab' de Google Sheets.
+    Si no hay internet, usa el caché local."""
+    
+    # ============================================
+    # VERIFICAR CONEXIÓN - SI NO HAY, USAR CACHÉ
+    # ============================================
+    tiene_conexion, _ = verificar_conexion_internet(timeout=2)
+    
+    if not tiene_conexion:
+        # Usar caché local
+        nombre, mensaje = buscar_colaborador_en_cache(codigo_barras)
+        if nombre:
+            return nombre, mensaje
+        else:
+            return None, "📴 Sin internet. Colaborador no encontrado en caché local. Actualiza el caché cuando tengas conexión."
+    
+    # ============================================
+    # HAY CONEXIÓN - BUSCAR EN GOOGLE SHEETS
+    # ============================================
     spreadsheet, mensaje = conectar_google_sheets()
     
     if spreadsheet is None:
+        # Falló la conexión a Sheets, intentar caché
+        nombre, mensaje_cache = buscar_colaborador_en_cache(codigo_barras)
+        if nombre:
+            return nombre, mensaje_cache
         return None, mensaje
     
     try:
@@ -1651,10 +1858,32 @@ def buscar_colaborador_en_datos_colab(codigo_barras):
         return None, f"Error al buscar en Google Sheets: {str(e)}"
 
 def buscar_servicio_por_codigo(codigo_barras):
-    """Buscar servicio por código de barras en la hoja 'Servicio'"""
+    """Buscar servicio por código de barras en la hoja 'Servicio'.
+    Si no hay internet, usa el caché local."""
+    
+    # ============================================
+    # VERIFICAR CONEXIÓN - SI NO HAY, USAR CACHÉ
+    # ============================================
+    tiene_conexion, _ = verificar_conexion_internet(timeout=2)
+    
+    if not tiene_conexion:
+        # Usar caché local
+        codigo, actividad, mensaje = buscar_servicio_en_cache(codigo_barras)
+        if codigo and actividad:
+            return codigo, actividad, mensaje
+        else:
+            return None, None, "📴 Sin internet. Servicio no encontrado en caché local."
+    
+    # ============================================
+    # HAY CONEXIÓN - BUSCAR EN GOOGLE SHEETS
+    # ============================================
     spreadsheet, mensaje = conectar_google_sheets()
     
     if spreadsheet is None:
+        # Falló la conexión, intentar caché
+        codigo, actividad, mensaje_cache = buscar_servicio_en_cache(codigo_barras)
+        if codigo and actividad:
+            return codigo, actividad, mensaje_cache
         return None, None, f"Error de conexión: {mensaje}"
     
     try:
@@ -1731,10 +1960,32 @@ def buscar_servicio_por_codigo(codigo_barras):
         return None, None, f"Error al buscar servicio: {str(e)}"
 
 def buscar_op_por_codigo(codigo_barras):
-    """Buscar OP por código de barras en la hoja 'OPS' y traer toda la información"""
+    """Buscar OP por código de barras en la hoja 'OPS' y traer toda la información.
+    Si no hay internet, usa el caché local."""
+    
+    # ============================================
+    # VERIFICAR CONEXIÓN - SI NO HAY, USAR CACHÉ
+    # ============================================
+    tiene_conexion, _ = verificar_conexion_internet(timeout=2)
+    
+    if not tiene_conexion:
+        # Usar caché local
+        op_info, mensaje = buscar_op_en_cache(codigo_barras)
+        if op_info:
+            return op_info, mensaje
+        else:
+            return None, "📴 Sin internet. OP no encontrada en caché local."
+    
+    # ============================================
+    # HAY CONEXIÓN - BUSCAR EN GOOGLE SHEETS
+    # ============================================
     spreadsheet, mensaje = conectar_google_sheets()
     
     if spreadsheet is None:
+        # Falló la conexión, intentar caché
+        op_info, mensaje_cache = buscar_op_en_cache(codigo_barras)
+        if op_info:
+            return op_info, mensaje_cache
         return None, f"Error de conexión: {mensaje}"
     
     try:
@@ -5714,6 +5965,53 @@ def configurar_sistema():
     else:
         st.info("✨ No hay registros pendientes de sincronización. Todos los datos están actualizados.")
     
+    # ============================================
+    # SECCIÓN DE CACHÉ DE DATOS OFFLINE
+    # ============================================
+    st.markdown("---")
+    st.subheader("📥 Caché de Datos para Modo Offline")
+    
+    cache = obtener_cache_datos()
+    col_cache1, col_cache2, col_cache3, col_cache4 = st.columns(4)
+    
+    with col_cache1:
+        num_colab = len(cache.get('colaboradores', []))
+        st.metric("👥 Colaboradores", num_colab)
+    
+    with col_cache2:
+        num_serv = len(cache.get('servicios', []))
+        st.metric("🔧 Servicios", num_serv)
+    
+    with col_cache3:
+        num_ops = len(cache.get('ops', []))
+        st.metric("📋 OPs", num_ops)
+    
+    with col_cache4:
+        ultima = cache.get('ultima_actualizacion', 'Nunca')
+        st.metric("🕐 Actualizado", ultima[:16] if ultima and len(ultima) > 16 else (ultima or 'Nunca'))
+    
+    col_upd1, col_upd2 = st.columns(2)
+    
+    with col_upd1:
+        if st.button("📥 Actualizar Caché Ahora", type="primary", disabled=not tiene_conexion, use_container_width=True):
+            if tiene_conexion:
+                with st.spinner("Descargando datos de Google Sheets..."):
+                    exito, mensaje = actualizar_todo_cache_desde_sheets()
+                
+                if exito:
+                    st.success(f"✅ {mensaje}")
+                else:
+                    st.error(f"❌ {mensaje}")
+                st.rerun()
+            else:
+                st.error("❌ Se requiere conexión a internet para actualizar el caché")
+    
+    with col_upd2:
+        if num_colab == 0 and num_serv == 0 and num_ops == 0:
+            st.warning("⚠️ El caché está vacío. Actualiza para poder trabajar sin internet.")
+        else:
+            st.success("✅ Datos disponibles para modo offline")
+    
     # Información sobre el modo offline
     with st.expander("ℹ️ ¿Cómo funciona el modo offline?"):
         st.markdown("""
@@ -5738,6 +6036,12 @@ def configurar_sistema():
         4. **📁 Archivo de respaldo:**
            - Los registros se guardan en `registros_pendientes.json`
            - Este archivo persiste aunque se cierre la aplicación
+        
+        5. **📥 Caché de datos:**
+           - Los colaboradores, servicios y OPs se guardan localmente
+           - Permite buscar datos sin conexión a internet
+           - Se actualiza automáticamente al iniciar la app (si hay conexión)
+           - También puede actualizarse manualmente
         """)
     
     st.subheader("🔗 Integración con Google Sheets")
@@ -5939,13 +6243,23 @@ def main():
     # ============================================
     if 'sync_intentado' not in st.session_state:
         st.session_state.sync_intentado = True
-        pendientes = obtener_registros_pendientes()
-        if pendientes:
-            tiene_conexion, _ = verificar_conexion_internet(timeout=2)
-            if tiene_conexion:
+        tiene_conexion, _ = verificar_conexion_internet(timeout=2)
+        
+        if tiene_conexion:
+            # Sincronizar registros pendientes
+            pendientes = obtener_registros_pendientes()
+            if pendientes:
                 sincronizados, fallidos, restantes = sincronizar_registros_pendientes_silencioso()
                 if sincronizados > 0:
                     st.toast(f"✅ {sincronizados} registro(s) pendientes sincronizados automáticamente")
+            
+            # Actualizar caché de datos para modo offline
+            cache = obtener_cache_datos()
+            # Solo actualizar si el caché está vacío o tiene más de 1 hora
+            if not cache.get('colaboradores') or not cache.get('ultima_actualizacion'):
+                exito, mensaje = actualizar_todo_cache_desde_sheets()
+                if exito:
+                    st.toast("📥 Datos descargados para modo offline")
     
     if st.session_state.admin_mode and st.session_state.screen == 'admin' and st.session_state.admin_authenticated:
         pantalla_admin()
