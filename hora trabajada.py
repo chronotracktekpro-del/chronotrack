@@ -46,445 +46,6 @@ def obtener_fecha_colombia():
     """Obtener la fecha actual en zona horaria de Colombia"""
     return obtener_hora_colombia().date()
 
-# ============================================
-# SISTEMA DE REGISTROS OFFLINE
-# Permite guardar registros sin conexión a internet
-# y sincronizarlos automáticamente cuando vuelva
-# ============================================
-
-ARCHIVO_REGISTROS_PENDIENTES = 'registros_pendientes.json'
-ARCHIVO_CACHE_DATOS = 'cache_datos_offline.json'
-
-def verificar_conexion_internet(timeout=3):
-    """
-    Verifica si hay conexión a internet intentando conectar a Google.
-    Retorna: (tiene_conexion: bool, mensaje: str)
-    """
-    import socket
-    try:
-        # Intentar conectar a Google (muy confiable)
-        socket.setdefaulttimeout(timeout)
-        socket.socket(socket.AF_INET, socket.SOCK_STREAM).connect(("www.google.com", 80))
-        return True, "Conexión activa"
-    except socket.error:
-        pass
-    
-    try:
-        # Intentar con servidor DNS de Google
-        socket.socket(socket.AF_INET, socket.SOCK_STREAM).connect(("8.8.8.8", 53))
-        return True, "Conexión activa"
-    except socket.error:
-        pass
-    
-    return False, "Sin conexión a internet"
-
-def obtener_registros_pendientes():
-    """Obtener lista de registros pendientes de sincronización"""
-    if os.path.exists(ARCHIVO_REGISTROS_PENDIENTES):
-        try:
-            with open(ARCHIVO_REGISTROS_PENDIENTES, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except:
-            return []
-    return []
-
-def guardar_registro_pendiente(registro):
-    """
-    Guardar un registro en el archivo local de pendientes.
-    Se usa cuando no hay conexión a internet.
-    """
-    pendientes = obtener_registros_pendientes()
-    
-    # Convertir objetos date/time a string para JSON
-    registro_serializable = {}
-    for key, value in registro.items():
-        if isinstance(value, (date, datetime)):
-            registro_serializable[key] = value.strftime('%Y-%m-%d')
-        elif isinstance(value, time):
-            registro_serializable[key] = value.strftime('%H:%M:%S')
-        else:
-            registro_serializable[key] = value
-    
-    # Agregar timestamp del momento en que se guardó
-    registro_serializable['_timestamp_offline'] = datetime.now(COLOMBIA_TZ).strftime('%Y-%m-%d %H:%M:%S')
-    registro_serializable['_id_pendiente'] = len(pendientes) + 1
-    
-    pendientes.append(registro_serializable)
-    
-    with open(ARCHIVO_REGISTROS_PENDIENTES, 'w', encoding='utf-8') as f:
-        json.dump(pendientes, f, ensure_ascii=False, indent=2)
-    
-    return len(pendientes)
-
-def eliminar_registro_pendiente(id_pendiente):
-    """Eliminar un registro pendiente después de sincronizarlo"""
-    pendientes = obtener_registros_pendientes()
-    pendientes = [r for r in pendientes if r.get('_id_pendiente') != id_pendiente]
-    
-    with open(ARCHIVO_REGISTROS_PENDIENTES, 'w', encoding='utf-8') as f:
-        json.dump(pendientes, f, ensure_ascii=False, indent=2)
-
-def limpiar_registros_pendientes():
-    """Eliminar todos los registros pendientes (después de sincronizar exitosamente)"""
-    if os.path.exists(ARCHIVO_REGISTROS_PENDIENTES):
-        with open(ARCHIVO_REGISTROS_PENDIENTES, 'w', encoding='utf-8') as f:
-            json.dump([], f)
-
-# ============================================
-# SISTEMA DE CACHÉ PARA MODO OFFLINE
-# Guarda copia local de Colaboradores, Servicios y OPs
-# ============================================
-
-def obtener_cache_datos():
-    """Obtener datos del caché local"""
-    if os.path.exists(ARCHIVO_CACHE_DATOS):
-        try:
-            with open(ARCHIVO_CACHE_DATOS, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except:
-            return {'colaboradores': [], 'servicios': [], 'ops': [], 'ultima_actualizacion': None}
-    return {'colaboradores': [], 'servicios': [], 'ops': [], 'ultima_actualizacion': None}
-
-def guardar_cache_datos(datos):
-    """Guardar datos en el caché local"""
-    datos['ultima_actualizacion'] = datetime.now(COLOMBIA_TZ).strftime('%Y-%m-%d %H:%M:%S')
-    with open(ARCHIVO_CACHE_DATOS, 'w', encoding='utf-8') as f:
-        json.dump(datos, f, ensure_ascii=False, indent=2)
-
-def actualizar_cache_colaboradores(registros):
-    """Actualizar caché de colaboradores"""
-    cache = obtener_cache_datos()
-    cache['colaboradores'] = registros
-    guardar_cache_datos(cache)
-
-def actualizar_cache_servicios(registros):
-    """Actualizar caché de servicios"""
-    cache = obtener_cache_datos()
-    cache['servicios'] = registros
-    guardar_cache_datos(cache)
-
-def actualizar_cache_ops(registros):
-    """Actualizar caché de OPs"""
-    cache = obtener_cache_datos()
-    cache['ops'] = registros
-    guardar_cache_datos(cache)
-
-def buscar_colaborador_en_cache(codigo_barras):
-    """Buscar colaborador en el caché local"""
-    cache = obtener_cache_datos()
-    colaboradores = cache.get('colaboradores', [])
-    
-    for colab in colaboradores:
-        cedula = str(colab.get('cedula', '')).strip()
-        if cedula == str(codigo_barras).strip():
-            nombre = colab.get('nombre', '')
-            if nombre:
-                return nombre, "Colaborador encontrado (modo offline)"
-    
-    return None, "Colaborador no encontrado en caché local"
-
-def buscar_servicio_en_cache(codigo_barras):
-    """Buscar servicio en el caché local"""
-    cache = obtener_cache_datos()
-    servicios = cache.get('servicios', [])
-    
-    for servicio in servicios:
-        codigo = str(servicio.get('codigo', '')).strip()
-        if codigo == str(codigo_barras).strip():
-            actividad = servicio.get('actividad', '')
-            if actividad:
-                return codigo, actividad, "Servicio encontrado (modo offline)"
-    
-    return None, None, "Servicio no encontrado en caché local"
-
-def buscar_op_en_cache(codigo_barras):
-    """Buscar OP en el caché local"""
-    cache = obtener_cache_datos()
-    ops = cache.get('ops', [])
-    
-    for op in ops:
-        orden = str(op.get('orden', '')).strip()
-        if orden == str(codigo_barras).strip():
-            return {
-                'orden': op.get('orden', ''),
-                'referencia': op.get('referencia', ''),
-                'cantidades': op.get('cantidades', ''),
-                'cliente': op.get('cliente', ''),
-                'item': op.get('item', '')
-            }, "OP encontrada (modo offline)"
-    
-    return None, "OP no encontrada en caché local"
-
-def actualizar_todo_cache_desde_sheets():
-    """
-    Actualiza todo el caché descargando datos de Google Sheets.
-    Retorna: (exito: bool, mensaje: str)
-    """
-    tiene_conexion, _ = verificar_conexion_internet(timeout=3)
-    if not tiene_conexion:
-        return False, "Sin conexión a internet"
-    
-    try:
-        spreadsheet, mensaje = conectar_google_sheets()
-        if not spreadsheet:
-            return False, f"Error conectando: {mensaje}"
-        
-        cache = obtener_cache_datos()
-        
-        # 1. Actualizar colaboradores
-        try:
-            ws_colab = spreadsheet.worksheet('Datos_colab')
-            all_values = ws_colab.get_all_values()
-            if len(all_values) > 1:
-                headers = [h.strip().lower() for h in all_values[0]]
-                colaboradores = []
-                for row in all_values[1:]:
-                    if len(row) >= 2:
-                        colab = {}
-                        for i, h in enumerate(headers):
-                            if i < len(row):
-                                colab[h] = row[i]
-                        # Normalizar claves
-                        colab_normalizado = {
-                            'cedula': colab.get('cedula', colab.get('codigo', '')),
-                            'nombre': colab.get('nombre', colab.get('empleado', ''))
-                        }
-                        if colab_normalizado['cedula']:
-                            colaboradores.append(colab_normalizado)
-                cache['colaboradores'] = colaboradores
-        except Exception as e:
-            print(f"Error actualizando colaboradores: {e}")
-        
-        # 2. Actualizar servicios
-        try:
-            ws_serv = spreadsheet.worksheet('Servicio')
-            all_values = ws_serv.get_all_values()
-            if len(all_values) > 1:
-                headers = [h.strip().lower() for h in all_values[0]]
-                servicios = []
-                for row in all_values[1:]:
-                    if len(row) >= 2:
-                        serv = {}
-                        for i, h in enumerate(headers):
-                            if i < len(row):
-                                serv[h] = row[i]
-                        # Normalizar claves
-                        serv_normalizado = {
-                            'codigo': serv.get('codigo', ''),
-                            'actividad': serv.get('actividad', serv.get('descripcion', ''))
-                        }
-                        if serv_normalizado['codigo']:
-                            servicios.append(serv_normalizado)
-                cache['servicios'] = servicios
-        except Exception as e:
-            print(f"Error actualizando servicios: {e}")
-        
-        # 3. Actualizar OPs
-        try:
-            ws_ops = spreadsheet.worksheet('OPS')
-            all_values = ws_ops.get_all_values()
-            if len(all_values) > 1:
-                headers = [h.strip().lower() for h in all_values[0]]
-                ops = []
-                for row in all_values[1:]:
-                    if len(row) >= 1:
-                        op = {}
-                        for i, h in enumerate(headers):
-                            if i < len(row):
-                                op[h] = row[i]
-                        # Normalizar claves
-                        op_normalizado = {
-                            'orden': op.get('orden', op.get('op', '')),
-                            'referencia': op.get('referencia', ''),
-                            'cantidades': op.get('cantidades', op.get('cantidad', '')),
-                            'cliente': op.get('cliente', ''),
-                            'item': op.get('item', op.get('descripcion', ''))
-                        }
-                        if op_normalizado['orden']:
-                            ops.append(op_normalizado)
-                cache['ops'] = ops
-        except Exception as e:
-            print(f"Error actualizando OPs: {e}")
-        
-        guardar_cache_datos(cache)
-        
-        total = len(cache.get('colaboradores', [])) + len(cache.get('servicios', [])) + len(cache.get('ops', []))
-        return True, f"Caché actualizado: {len(cache.get('colaboradores', []))} colaboradores, {len(cache.get('servicios', []))} servicios, {len(cache.get('ops', []))} OPs"
-        
-    except Exception as e:
-        return False, f"Error actualizando caché: {str(e)}"
-
-def sincronizar_registros_pendientes_silencioso():
-    """
-    Intenta sincronizar registros pendientes de forma silenciosa.
-    Retorna: (sincronizados: int, fallidos: int, pendientes: int)
-    """
-    pendientes = obtener_registros_pendientes()
-    if not pendientes:
-        return 0, 0, 0
-    
-    tiene_conexion, _ = verificar_conexion_internet()
-    if not tiene_conexion:
-        return 0, 0, len(pendientes)
-    
-    sincronizados = 0
-    fallidos = 0
-    registros_fallidos = []
-    
-    for registro in pendientes:
-        try:
-            # Reconstruir fecha si es string
-            if isinstance(registro.get('fecha'), str):
-                try:
-                    registro['fecha'] = datetime.strptime(registro['fecha'], '%Y-%m-%d').date()
-                except:
-                    pass
-            
-            # Intentar guardar en Google Sheets (sin mostrar mensajes)
-            guardar_en_google_sheets_offline(registro)
-            sincronizados += 1
-        except Exception as e:
-            fallidos += 1
-            registros_fallidos.append(registro)
-    
-    # Guardar solo los fallidos
-    with open(ARCHIVO_REGISTROS_PENDIENTES, 'w', encoding='utf-8') as f:
-        json.dump(registros_fallidos, f, ensure_ascii=False, indent=2)
-    
-    return sincronizados, fallidos, len(registros_fallidos)
-
-def guardar_en_google_sheets_offline(registro):
-    """
-    Función específica para guardar registros offline en Google Sheets.
-    Similar a guardar_en_google_sheets_simple pero sin mensajes de UI.
-    """
-    spreadsheet, mensaje = conectar_google_sheets()
-    if not spreadsheet:
-        raise Exception(f"No se pudo conectar: {mensaje}")
-    
-    worksheet = spreadsheet.worksheet('Registros')
-    
-    # Preparar datos
-    fecha_obj = registro.get('fecha')
-    if hasattr(fecha_obj, 'strftime'):
-        fecha_str = fecha_obj.strftime('%d/%m/%Y')
-    elif isinstance(fecha_obj, str):
-        try:
-            fecha_parsed = datetime.strptime(fecha_obj, '%Y-%m-%d')
-            fecha_str = fecha_parsed.strftime('%d/%m/%Y')
-        except:
-            fecha_str = fecha_obj
-    else:
-        fecha_str = str(fecha_obj)
-    
-    servicio = registro.get('servicio', '')
-    codigo_servicio = ''
-    actividad_servicio = ''
-    
-    if servicio and ' - ' in servicio:
-        partes_servicio = servicio.split(' - ', 1)
-        codigo_servicio = partes_servicio[0].strip()
-        actividad_servicio = partes_servicio[1].strip()
-    
-    hora_entrada = registro.get('hora_entrada', '')
-    hora_salida = registro.get('hora_salida', '')
-    
-    if isinstance(hora_entrada, time):
-        hora_entrada = hora_entrada.strftime('%H:%M:%S')
-    if isinstance(hora_salida, time):
-        hora_salida = hora_salida.strftime('%H:%M:%S')
-    
-    tiempo_horas_calculado = registro.get('tiempo_horas', 0)
-    
-    fila_datos = [
-        fecha_str,
-        str(registro.get('cedula', '')),
-        str(registro.get('empleado', '')),
-        str(registro.get('op', '')),
-        str(registro.get('nombre_cliente', '')),
-        codigo_servicio,
-        actividad_servicio,
-        str(registro.get('descripcion_op', '')),
-        float(tiempo_horas_calculado) if tiempo_horas_calculado else 0,
-        str(registro.get('cantidades', '')),
-        str(registro.get('descripcion_proceso', 'PRODUCCION')),
-        str(registro.get('mes', '')),
-        str(registro.get('año', '')),
-        str(registro.get('semana', '')),
-        str(registro.get('referencia', '')),
-        str(registro.get('hora_exacta', '')),
-    ]
-    
-    worksheet.append_row(fila_datos, value_input_option='USER_ENTERED')
-
-def mostrar_indicador_conexion():
-    """Muestra indicador visual del estado de conexión y registros pendientes"""
-    tiene_conexion, mensaje = verificar_conexion_internet(timeout=2)
-    pendientes = obtener_registros_pendientes()
-    num_pendientes = len(pendientes)
-    
-    if tiene_conexion and num_pendientes == 0:
-        # Todo bien, conexión activa y sin pendientes
-        st.markdown("""
-        <div style='position: fixed; top: 10px; right: 10px; z-index: 9999; 
-                    background: linear-gradient(135deg, #28a745, #20c997); 
-                    color: white; padding: 8px 15px; border-radius: 20px; 
-                    font-size: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.2);
-                    display: flex; align-items: center; gap: 8px;'>
-            <span style='font-size: 14px;'>🟢</span>
-            <span>Conectado</span>
-        </div>
-        """, unsafe_allow_html=True)
-    elif tiene_conexion and num_pendientes > 0:
-        # Hay conexión pero registros pendientes
-        st.markdown(f"""
-        <div style='position: fixed; top: 10px; right: 10px; z-index: 9999; 
-                    background: linear-gradient(135deg, #ffc107, #fd7e14); 
-                    color: #212529; padding: 8px 15px; border-radius: 20px; 
-                    font-size: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.2);
-                    display: flex; align-items: center; gap: 8px;'>
-            <span style='font-size: 14px;'>🔄</span>
-            <span>Sincronizando {num_pendientes} registro(s)...</span>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        # Intentar sincronizar automáticamente
-        sincronizados, fallidos, restantes = sincronizar_registros_pendientes_silencioso()
-        if sincronizados > 0:
-            st.toast(f"✅ {sincronizados} registro(s) sincronizados correctamente")
-            st.rerun()
-    else:
-        # Sin conexión
-        if num_pendientes > 0:
-            st.markdown(f"""
-            <div style='position: fixed; top: 10px; right: 10px; z-index: 9999; 
-                        background: linear-gradient(135deg, #dc3545, #c82333); 
-                        color: white; padding: 8px 15px; border-radius: 20px; 
-                        font-size: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.2);
-                        display: flex; align-items: center; gap: 8px;
-                        animation: pulse 2s infinite;'>
-                <span style='font-size: 14px;'>📴</span>
-                <span>Sin conexión - {num_pendientes} pendiente(s)</span>
-            </div>
-            <style>
-                @keyframes pulse {{
-                    0%, 100% {{ opacity: 1; }}
-                    50% {{ opacity: 0.7; }}
-                }}
-            </style>
-            """, unsafe_allow_html=True)
-        else:
-            st.markdown("""
-            <div style='position: fixed; top: 10px; right: 10px; z-index: 9999; 
-                        background: linear-gradient(135deg, #6c757d, #495057); 
-                        color: white; padding: 8px 15px; border-radius: 20px; 
-                        font-size: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.2);
-                        display: flex; align-items: center; gap: 8px;'>
-                <span style='font-size: 14px;'>📴</span>
-                <span>Sin conexión - Modo Offline activo</span>
-            </div>
-            """, unsafe_allow_html=True)
-
 # Configuración de la página
 st.set_page_config(
     page_title="ChronoTrack - Tekpro",
@@ -1785,32 +1346,10 @@ def verificar_registros_del_dia_en_sheets(cedula, fecha_actual):
         return [], True, None  # En caso de error, asumir primer registro
 
 def buscar_colaborador_en_datos_colab(codigo_barras):
-    """Buscar colaborador en la hoja 'Datos_colab' de Google Sheets.
-    Si no hay internet, usa el caché local."""
-    
-    # ============================================
-    # VERIFICAR CONEXIÓN - SI NO HAY, USAR CACHÉ
-    # ============================================
-    tiene_conexion, _ = verificar_conexion_internet(timeout=2)
-    
-    if not tiene_conexion:
-        # Usar caché local
-        nombre, mensaje = buscar_colaborador_en_cache(codigo_barras)
-        if nombre:
-            return nombre, mensaje
-        else:
-            return None, "📴 Sin internet. Colaborador no encontrado en caché local. Actualiza el caché cuando tengas conexión."
-    
-    # ============================================
-    # HAY CONEXIÓN - BUSCAR EN GOOGLE SHEETS
-    # ============================================
+    """Buscar colaborador en la hoja 'Datos_colab' de Google Sheets"""
     spreadsheet, mensaje = conectar_google_sheets()
     
     if spreadsheet is None:
-        # Falló la conexión a Sheets, intentar caché
-        nombre, mensaje_cache = buscar_colaborador_en_cache(codigo_barras)
-        if nombre:
-            return nombre, mensaje_cache
         return None, mensaje
     
     try:
@@ -1858,32 +1397,10 @@ def buscar_colaborador_en_datos_colab(codigo_barras):
         return None, f"Error al buscar en Google Sheets: {str(e)}"
 
 def buscar_servicio_por_codigo(codigo_barras):
-    """Buscar servicio por código de barras en la hoja 'Servicio'.
-    Si no hay internet, usa el caché local."""
-    
-    # ============================================
-    # VERIFICAR CONEXIÓN - SI NO HAY, USAR CACHÉ
-    # ============================================
-    tiene_conexion, _ = verificar_conexion_internet(timeout=2)
-    
-    if not tiene_conexion:
-        # Usar caché local
-        codigo, actividad, mensaje = buscar_servicio_en_cache(codigo_barras)
-        if codigo and actividad:
-            return codigo, actividad, mensaje
-        else:
-            return None, None, "📴 Sin internet. Servicio no encontrado en caché local."
-    
-    # ============================================
-    # HAY CONEXIÓN - BUSCAR EN GOOGLE SHEETS
-    # ============================================
+    """Buscar servicio por código de barras en la hoja 'Servicio'"""
     spreadsheet, mensaje = conectar_google_sheets()
     
     if spreadsheet is None:
-        # Falló la conexión, intentar caché
-        codigo, actividad, mensaje_cache = buscar_servicio_en_cache(codigo_barras)
-        if codigo and actividad:
-            return codigo, actividad, mensaje_cache
         return None, None, f"Error de conexión: {mensaje}"
     
     try:
@@ -1960,32 +1477,10 @@ def buscar_servicio_por_codigo(codigo_barras):
         return None, None, f"Error al buscar servicio: {str(e)}"
 
 def buscar_op_por_codigo(codigo_barras):
-    """Buscar OP por código de barras en la hoja 'OPS' y traer toda la información.
-    Si no hay internet, usa el caché local."""
-    
-    # ============================================
-    # VERIFICAR CONEXIÓN - SI NO HAY, USAR CACHÉ
-    # ============================================
-    tiene_conexion, _ = verificar_conexion_internet(timeout=2)
-    
-    if not tiene_conexion:
-        # Usar caché local
-        op_info, mensaje = buscar_op_en_cache(codigo_barras)
-        if op_info:
-            return op_info, mensaje
-        else:
-            return None, "📴 Sin internet. OP no encontrada en caché local."
-    
-    # ============================================
-    # HAY CONEXIÓN - BUSCAR EN GOOGLE SHEETS
-    # ============================================
+    """Buscar OP por código de barras en la hoja 'OPS' y traer toda la información"""
     spreadsheet, mensaje = conectar_google_sheets()
     
     if spreadsheet is None:
-        # Falló la conexión, intentar caché
-        op_info, mensaje_cache = buscar_op_en_cache(codigo_barras)
-        if op_info:
-            return op_info, mensaje_cache
         return None, f"Error de conexión: {mensaje}"
     
     try:
@@ -3726,76 +3221,23 @@ def componente_escaner_codigo(key_prefix, placeholder_text, label_text):
         )
         st.markdown('</div>', unsafe_allow_html=True)
         
-        # Auto-enfoque PERMANENTE para escáner - NUNCA pierde el foco
+        # Auto-enfoque para escáner
         components.html(f"""
         <script>
-        (function() {{
-            var targetInput = null;
-            var placeholderSearch = '{placeholder_text[:20]}';
-            
-            function findAndFocusInput() {{
-                if (targetInput && document.body.contains(targetInput)) {{
-                    if (document.activeElement !== targetInput) {{
-                        targetInput.focus();
-                    }}
-                    return;
-                }}
-                
-                var inputs = parent.document.querySelectorAll('input[type="text"]');
-                for (var inp of inputs) {{
-                    if (inp.placeholder && inp.placeholder.includes(placeholderSearch)) {{
-                        targetInput = inp;
-                        
-                        // Bloquear cualquier intento de quitar el foco
-                        targetInput.addEventListener('blur', function(e) {{
-                            e.preventDefault();
-                            e.stopPropagation();
-                            setTimeout(function() {{
-                                targetInput.focus();
-                            }}, 10);
-                        }});
-                        
-                        // También capturar clicks en cualquier lugar para reforzar
-                        parent.document.addEventListener('click', function() {{
-                            setTimeout(function() {{
-                                if (targetInput) targetInput.focus();
-                            }}, 50);
-                        }});
-                        
-                        // Capturar teclas para asegurar que el input tiene foco
-                        parent.document.addEventListener('keydown', function(e) {{
-                            if (targetInput && document.activeElement !== targetInput) {{
-                                targetInput.focus();
-                            }}
-                        }}, true);
-                        
-                        targetInput.focus();
-                        break;
-                    }}
+        function focusInput() {{
+            var inputs = parent.document.querySelectorAll('input[type="text"]');
+            for (var inp of inputs) {{
+                if (inp.placeholder && inp.placeholder.includes('{placeholder_text[:20]}')) {{
+                    inp.focus();
+                    inp.select();
+                    break;
                 }}
             }}
-            
-            // Ejecutar inmediatamente
-            findAndFocusInput();
-            
-            // Ejecutar múltiples veces al inicio
-            setTimeout(findAndFocusInput, 50);
-            setTimeout(findAndFocusInput, 100);
-            setTimeout(findAndFocusInput, 200);
-            setTimeout(findAndFocusInput, 500);
-            
-            // INTERVALO PERMANENTE - cada 100ms verificar y reenfocar
-            setInterval(findAndFocusInput, 100);
-            
-            // También usar requestAnimationFrame para máxima responsividad
-            function keepFocus() {{
-                if (targetInput && document.activeElement !== targetInput) {{
-                    targetInput.focus();
-                }}
-                requestAnimationFrame(keepFocus);
-            }}
-            requestAnimationFrame(keepFocus);
-        }})();
+        }}
+        
+        focusInput();
+        setTimeout(focusInput, 100);
+        setTimeout(focusInput, 500);
         </script>
         """, height=0)
     
@@ -4756,27 +4198,7 @@ Se crearán **DOS registros**:
     st.rerun()
 
 def guardar_en_google_sheets_simple(registro):
-    """Función ultra-básica para guardar en Google Sheets con máxima confiabilidad.
-    Si no hay conexión, guarda localmente y sincroniza después."""
-    
-    # ============================================
-    # VERIFICAR CONEXIÓN A INTERNET PRIMERO
-    # ============================================
-    tiene_conexion, msg_conexion = verificar_conexion_internet(timeout=3)
-    
-    if not tiene_conexion:
-        # NO hay internet - guardar localmente
-        num_pendientes = guardar_registro_pendiente(registro)
-        st.warning(f"""📴 **Sin conexión a internet**
-        
-El registro se ha guardado **localmente** y se sincronizará automáticamente cuando vuelva la conexión.
-
-📋 Registros pendientes de sincronizar: **{num_pendientes}**
-
-✅ **No te preocupes**, tus registros están seguros.""")
-        return True  # Retornar True porque se guardó localmente
-    
-    # HAY internet - intentar guardar normalmente
+    """Función ultra-básica para guardar en Google Sheets con máxima confiabilidad"""
     try:
         spreadsheet, mensaje = conectar_google_sheets()
         if not spreadsheet:
@@ -4880,22 +4302,10 @@ El registro se ha guardado **localmente** y se sincronizará automáticamente cu
                     
                     worksheet.append_row(fila_minima, value_input_option='USER_ENTERED')
                     return True
-        except Exception as e2:
+        except:
             pass
         
-        # ============================================
-        # SI TODO FALLA - GUARDAR LOCALMENTE
-        # ============================================
-        num_pendientes = guardar_registro_pendiente(registro)
-        st.warning(f"""⚠️ **Error de conexión con Google Sheets**
-        
-El registro se ha guardado **localmente** y se sincronizará automáticamente después.
-
-📋 Registros pendientes: **{num_pendientes}**
-🔄 Se sincronizarán cuando vuelva la conexión.
-
-Error técnico: {str(e)[:100]}""")
-        return True  # Retornar True porque se guardó localmente
+        raise Exception(f"Error guardando en Google Sheets: {str(e)}")
 
 def guardar_en_google_sheets(registro):
     """Guardar registro en Google Sheets en la hoja 'Registros' existente"""
@@ -5886,163 +5296,6 @@ def configurar_sistema():
             save_config(config)
             st.success("✅ Horarios laborales actualizados")
             
-    # ============================================
-    # SECCIÓN DE SINCRONIZACIÓN OFFLINE
-    # ============================================
-    st.subheader("📴 Gestión de Registros Offline")
-    
-    pendientes = obtener_registros_pendientes()
-    tiene_conexion, msg_conexion = verificar_conexion_internet(timeout=2)
-    
-    # Estado de conexión
-    col_status1, col_status2 = st.columns(2)
-    with col_status1:
-        if tiene_conexion:
-            st.success(f"🟢 **Estado:** Conectado a internet")
-        else:
-            st.error(f"🔴 **Estado:** Sin conexión a internet")
-    
-    with col_status2:
-        if len(pendientes) == 0:
-            st.success(f"✅ **Pendientes:** 0 registros")
-        else:
-            st.warning(f"⏳ **Pendientes:** {len(pendientes)} registro(s) por sincronizar")
-    
-    # Si hay registros pendientes, mostrarlos
-    if pendientes:
-        with st.expander(f"📋 Ver {len(pendientes)} registro(s) pendientes", expanded=True):
-            for i, reg in enumerate(pendientes):
-                col1, col2, col3, col4 = st.columns([2, 2, 2, 1])
-                with col1:
-                    st.write(f"**{reg.get('empleado', 'N/A')}**")
-                    st.caption(f"Cédula: {reg.get('cedula', 'N/A')}")
-                with col2:
-                    st.write(f"📅 {reg.get('fecha', 'N/A')}")
-                    st.caption(f"OP: {reg.get('op', 'N/A')}")
-                with col3:
-                    st.write(f"⏱️ {reg.get('tiempo_horas', 0):.3f} hrs")
-                    st.caption(f"Guardado: {reg.get('_timestamp_offline', 'N/A')}")
-                with col4:
-                    st.write(f"#{reg.get('_id_pendiente', i+1)}")
-                st.divider()
-        
-        # Botones de acción
-        col_btn1, col_btn2, col_btn3 = st.columns(3)
-        
-        with col_btn1:
-            if st.button("🔄 Sincronizar Ahora", type="primary", disabled=not tiene_conexion, use_container_width=True):
-                if tiene_conexion:
-                    with st.spinner("Sincronizando registros..."):
-                        sincronizados, fallidos, restantes = sincronizar_registros_pendientes_silencioso()
-                    
-                    if sincronizados > 0:
-                        st.success(f"✅ {sincronizados} registro(s) sincronizados correctamente")
-                    if fallidos > 0:
-                        st.warning(f"⚠️ {fallidos} registro(s) no pudieron sincronizarse")
-                    if restantes > 0:
-                        st.info(f"📋 Quedan {restantes} registro(s) pendientes")
-                    
-                    st.rerun()
-                else:
-                    st.error("❌ No hay conexión a internet")
-        
-        with col_btn2:
-            if st.button("🔍 Verificar Conexión", use_container_width=True):
-                tiene_conexion_nueva, msg = verificar_conexion_internet(timeout=3)
-                if tiene_conexion_nueva:
-                    st.success("✅ Conexión a internet disponible")
-                else:
-                    st.error("❌ Sin conexión a internet")
-                st.rerun()
-        
-        with col_btn3:
-            if st.button("🗑️ Limpiar Pendientes", type="secondary", use_container_width=True):
-                st.warning("⚠️ Esto eliminará todos los registros pendientes SIN sincronizarlos")
-                if st.checkbox("Confirmar eliminación", key="confirm_clear_pending"):
-                    limpiar_registros_pendientes()
-                    st.success("✅ Registros pendientes eliminados")
-                    st.rerun()
-    else:
-        st.info("✨ No hay registros pendientes de sincronización. Todos los datos están actualizados.")
-    
-    # ============================================
-    # SECCIÓN DE CACHÉ DE DATOS OFFLINE
-    # ============================================
-    st.markdown("---")
-    st.subheader("📥 Caché de Datos para Modo Offline")
-    
-    cache = obtener_cache_datos()
-    col_cache1, col_cache2, col_cache3, col_cache4 = st.columns(4)
-    
-    with col_cache1:
-        num_colab = len(cache.get('colaboradores', []))
-        st.metric("👥 Colaboradores", num_colab)
-    
-    with col_cache2:
-        num_serv = len(cache.get('servicios', []))
-        st.metric("🔧 Servicios", num_serv)
-    
-    with col_cache3:
-        num_ops = len(cache.get('ops', []))
-        st.metric("📋 OPs", num_ops)
-    
-    with col_cache4:
-        ultima = cache.get('ultima_actualizacion', 'Nunca')
-        st.metric("🕐 Actualizado", ultima[:16] if ultima and len(ultima) > 16 else (ultima or 'Nunca'))
-    
-    col_upd1, col_upd2 = st.columns(2)
-    
-    with col_upd1:
-        if st.button("📥 Actualizar Caché Ahora", type="primary", disabled=not tiene_conexion, use_container_width=True):
-            if tiene_conexion:
-                with st.spinner("Descargando datos de Google Sheets..."):
-                    exito, mensaje = actualizar_todo_cache_desde_sheets()
-                
-                if exito:
-                    st.success(f"✅ {mensaje}")
-                else:
-                    st.error(f"❌ {mensaje}")
-                st.rerun()
-            else:
-                st.error("❌ Se requiere conexión a internet para actualizar el caché")
-    
-    with col_upd2:
-        if num_colab == 0 and num_serv == 0 and num_ops == 0:
-            st.warning("⚠️ El caché está vacío. Actualiza para poder trabajar sin internet.")
-        else:
-            st.success("✅ Datos disponibles para modo offline")
-    
-    # Información sobre el modo offline
-    with st.expander("ℹ️ ¿Cómo funciona el modo offline?"):
-        st.markdown("""
-        **🔌 Sistema de Registros Sin Conexión**
-        
-        ChronoTrack cuenta con un sistema que permite continuar trabajando aunque no haya internet:
-        
-        1. **📴 Sin internet:**
-           - Los registros se guardan automáticamente en un archivo local
-           - Se muestra un indicador rojo en la esquina superior derecha
-           - El número de registros pendientes se actualiza en tiempo real
-        
-        2. **🟢 Cuando vuelve internet:**
-           - El sistema detecta automáticamente la conexión
-           - Los registros se sincronizan automáticamente con Google Sheets
-           - Se muestra una notificación de éxito
-        
-        3. **🔄 Sincronización manual:**
-           - Puedes forzar la sincronización desde este panel
-           - También puedes ver los registros pendientes antes de sincronizar
-        
-        4. **📁 Archivo de respaldo:**
-           - Los registros se guardan en `registros_pendientes.json`
-           - Este archivo persiste aunque se cierre la aplicación
-        
-        5. **📥 Caché de datos:**
-           - Los colaboradores, servicios y OPs se guardan localmente
-           - Permite buscar datos sin conexión a internet
-           - Se actualiza automáticamente al iniciar la app (si hay conexión)
-           - También puede actualizarse manualmente
-        """)
     
     st.subheader("🔗 Integración con Google Sheets")
     
@@ -6231,35 +5484,6 @@ def configurar_sistema():
 
 def main():
     """Función principal de la aplicación"""
-    
-    # ============================================
-    # MOSTRAR INDICADOR DE CONEXIÓN (siempre visible)
-    # ============================================
-    mostrar_indicador_conexion()
-    
-    # ============================================
-    # SINCRONIZACIÓN AUTOMÁTICA AL INICIO
-    # (solo una vez por sesión)
-    # ============================================
-    if 'sync_intentado' not in st.session_state:
-        st.session_state.sync_intentado = True
-        tiene_conexion, _ = verificar_conexion_internet(timeout=2)
-        
-        if tiene_conexion:
-            # Sincronizar registros pendientes
-            pendientes = obtener_registros_pendientes()
-            if pendientes:
-                sincronizados, fallidos, restantes = sincronizar_registros_pendientes_silencioso()
-                if sincronizados > 0:
-                    st.toast(f"✅ {sincronizados} registro(s) pendientes sincronizados automáticamente")
-            
-            # Actualizar caché de datos para modo offline
-            cache = obtener_cache_datos()
-            # Solo actualizar si el caché está vacío o tiene más de 1 hora
-            if not cache.get('colaboradores') or not cache.get('ultima_actualizacion'):
-                exito, mensaje = actualizar_todo_cache_desde_sheets()
-                if exito:
-                    st.toast("📥 Datos descargados para modo offline")
     
     if st.session_state.admin_mode and st.session_state.screen == 'admin' and st.session_state.admin_authenticated:
         pantalla_admin()
