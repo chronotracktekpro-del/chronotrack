@@ -3241,9 +3241,8 @@ def componente_escaner_codigo(key_prefix, placeholder_text, label_text):
                     if (rect.width > 0 && rect.height > 0) {{
                         inputEnfocado = inp;
                         
-                        // Enfoque y seleccionar todo
+                        // Solo enfoque, NO seleccionar todo para permitir pegar/corregir
                         inp.focus();
-                        inp.select();
                         
                         // Marcar como activo con estilos mejorados
                         inp.style.outline = '3px solid #3EAEA5';
@@ -3267,12 +3266,11 @@ def componente_escaner_codigo(key_prefix, placeholder_text, label_text):
                                 console.log('📝 Código detectado:', valorActual);
                                 console.log('📊 Longitud:', valorActual.length);
                                 
-                                // Auto-enter después de 500ms de inactividad
+                                // Auto-enter después de 4000ms (4 segundos) de inactividad
                                 clearTimeout(window.autoEnterTimeout);
                                 window.autoEnterTimeout = setTimeout(() => {{
                                     if (inp.value.trim() === valorActual) {{
                                         console.log('✅ Auto-enter ejecutado para:', valorActual);
-                                        
                                         // Simular presión de Enter
                                         const enterEvent = new KeyboardEvent('keydown', {{
                                             key: 'Enter',
@@ -3283,7 +3281,6 @@ def componente_escaner_codigo(key_prefix, placeholder_text, label_text):
                                             cancelable: true
                                         }});
                                         inp.dispatchEvent(enterEvent);
-                                        
                                         const enterEventPress = new KeyboardEvent('keypress', {{
                                             key: 'Enter',
                                             code: 'Enter',
@@ -3293,7 +3290,6 @@ def componente_escaner_codigo(key_prefix, placeholder_text, label_text):
                                             cancelable: true
                                         }});
                                         inp.dispatchEvent(enterEventPress);
-                                        
                                         const enterEventUp = new KeyboardEvent('keyup', {{
                                             key: 'Enter',
                                             code: 'Enter',
@@ -3303,15 +3299,13 @@ def componente_escaner_codigo(key_prefix, placeholder_text, label_text):
                                             cancelable: true
                                         }});
                                         inp.dispatchEvent(enterEventUp);
-                                        
                                         // Cambio de valor a través de Streamlit
                                         const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.parent.HTMLInputElement.prototype, 'value').set;
                                         nativeInputValueSetter.call(inp, valorActual);
-                                        
                                         inp.dispatchEvent(new Event('change', {{ bubbles: true }}));
                                         inp.dispatchEvent(new Event('input', {{ bubbles: true }}));
                                     }}
-                                }}, 500); // Esperar 500ms de inactividad
+                                }}, 4000); // Esperar 4000ms (4 segundos) de inactividad
                             }}
                         }});
                         
@@ -3350,7 +3344,7 @@ def componente_escaner_codigo(key_prefix, placeholder_text, label_text):
         console.log('💡 El código se enviará automáticamente 500ms después de escribir');
         </script>
         """, height=0)
-    
+
     return codigo_resultado
 
 def pantalla_inicio():
