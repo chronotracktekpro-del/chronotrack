@@ -2924,6 +2924,7 @@ def obtener_logo_base64():
 def componente_escaner_codigo(key_prefix, placeholder_text, label_text):
     """
     Componente reutilizable para escanear códigos con cámara o entrada manual.
+    MEJORADO: Auto-focus permanente + escritura fluida + auto-enter automático
     
     Args:
         key_prefix: Prefijo único para las keys de session_state
@@ -3210,7 +3211,7 @@ def componente_escaner_codigo(key_prefix, placeholder_text, label_text):
             help="El código detectado por la cámara se pegará aquí"
         )
     else:
-        # Campo optimizado para lectores USB
+        # Campo optimizado para lectores USB - MEJORADO CON AUTO-FOCUS PERMANENTE Y AUTO-ENTER
         st.markdown('<div class="barcode-scanner-field">', unsafe_allow_html=True)
         codigo_resultado = st.text_input(
             label_text,
@@ -3221,23 +3222,132 @@ def componente_escaner_codigo(key_prefix, placeholder_text, label_text):
         )
         st.markdown('</div>', unsafe_allow_html=True)
         
-        # Auto-enfoque para escáner
+        # Auto-enfoque MEJORADO + Auto-enter + Escritura fluida
         components.html(f"""
         <script>
-        function focusInput() {{
-            var inputs = parent.document.querySelectorAll('input[type="text"]');
-            for (var inp of inputs) {{
-                if (inp.placeholder && inp.placeholder.includes('{placeholder_text[:20]}')) {{
-                    inp.focus();
-                    inp.select();
-                    break;
+        // Variable para detectar si hay contenido nuevo
+        let ultimoValor = '';
+        let inputEnfocado = null;
+        
+        // Función para encontrar y enfocar el input correcto
+        function focusInputPersistent() {{
+            try {{
+                const parentDoc = window.parent.document;
+                const allInputs = parentDoc.querySelectorAll('input[type="text"]');
+                
+                for (let inp of allInputs) {{
+                    // Verificar que el input sea visible
+                    const rect = inp.getBoundingClientRect();
+                    if (rect.width > 0 && rect.height > 0) {{
+                        inputEnfocado = inp;
+                        
+                        // Enfoque y seleccionar todo
+                        inp.focus();
+                        inp.select();
+                        
+                        // Marcar como activo con estilos mejorados
+                        inp.style.outline = '3px solid #3EAEA5';
+                        inp.style.boxShadow = '0 0 15px rgba(62, 174, 165, 0.7), inset 0 0 5px rgba(62, 174, 165, 0.3)';
+                        inp.style.backgroundColor = '#f0fffe';
+                        
+                        // Permitir escritura fluida - no bloquear eventos
+                        inp.onkeydown = function(e) {{
+                            // No bloquear ninguna tecla para permitir escritura natural
+                            return true;
+                        }};
+                        
+                        // Listener para detectar cambios y hacer auto-enter
+                        inp.addEventListener('input', function(e) {{
+                            const valorActual = inp.value.trim();
+                            
+                            // Si el valor cambió y no está vacío
+                            if (valorActual !== ultimoValor && valorActual.length > 0) {{
+                                ultimoValor = valorActual;
+                                
+                                console.log('📝 Código detectado:', valorActual);
+                                console.log('📊 Longitud:', valorActual.length);
+                                
+                                // Auto-enter después de 500ms de inactividad
+                                clearTimeout(window.autoEnterTimeout);
+                                window.autoEnterTimeout = setTimeout(() => {{
+                                    if (inp.value.trim() === valorActual) {{
+                                        console.log('✅ Auto-enter ejecutado para:', valorActual);
+                                        
+                                        // Simular presión de Enter
+                                        const enterEvent = new KeyboardEvent('keydown', {{
+                                            key: 'Enter',
+                                            code: 'Enter',
+                                            keyCode: 13,
+                                            which: 13,
+                                            bubbles: true,
+                                            cancelable: true
+                                        }});
+                                        inp.dispatchEvent(enterEvent);
+                                        
+                                        const enterEventPress = new KeyboardEvent('keypress', {{
+                                            key: 'Enter',
+                                            code: 'Enter',
+                                            keyCode: 13,
+                                            which: 13,
+                                            bubbles: true,
+                                            cancelable: true
+                                        }});
+                                        inp.dispatchEvent(enterEventPress);
+                                        
+                                        const enterEventUp = new KeyboardEvent('keyup', {{
+                                            key: 'Enter',
+                                            code: 'Enter',
+                                            keyCode: 13,
+                                            which: 13,
+                                            bubbles: true,
+                                            cancelable: true
+                                        }});
+                                        inp.dispatchEvent(enterEventUp);
+                                        
+                                        // Cambio de valor a través de Streamlit
+                                        const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.parent.HTMLInputElement.prototype, 'value').set;
+                                        nativeInputValueSetter.call(inp, valorActual);
+                                        
+                                        inp.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                                        inp.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                                    }}
+                                }}, 500); // Esperar 500ms de inactividad
+                            }}
+                        }});
+                        
+                        // Mantener el enfoque - si hace click en otro lugar, volver a enfocar
+                        inp.addEventListener('blur', function(e) {{
+                            setTimeout(() => {{
+                                inp.focus();
+                                inp.select();
+                            }}, 50);
+                        }});
+                        
+                        break;
+                    }}
                 }}
+            }} catch (e) {{
+                console.error('Error en enfoque:', e);
             }}
         }}
         
-        focusInput();
-        setTimeout(focusInput, 100);
-        setTimeout(focusInput, 500);
+        // Enfoque inmediato
+        focusInputPersistent();
+        
+        // Enfoque continuo - cada 200ms (menos agresivo para permitir escritura fluida)
+        setInterval(focusInputPersistent, 200);
+        
+        // Enfoque adicional en eventos del documento
+        setTimeout(focusInputPersistent, 100);
+        setTimeout(focusInputPersistent, 500);
+        setTimeout(focusInputPersistent, 1000);
+        
+        // Escuchar cuando el usuario intenta hacer click en otro lugar
+        document.addEventListener('mousedown', focusInputPersistent, true);
+        document.addEventListener('focus', focusInputPersistent, true);
+        
+        console.log('🎯 Sistema de auto-focus + auto-enter activado');
+        console.log('💡 El código se enviará automáticamente 500ms después de escribir');
         </script>
         """, height=0)
     
@@ -3623,8 +3733,12 @@ def mostrar_paso_op():
                 st.rerun()
 
 def mostrar_confirmacion_guardado():
-    """Paso 5: Confirmación y guardado final"""
+    """Paso 5: Confirmación y guardado final - CON CONTEO REGRESIVO AUTOMÁTICO"""
     empleado_data = st.session_state.empleado_data
+    
+    # Inicializar contador
+    if "contador_guardado" not in st.session_state:
+        st.session_state.contador_guardado = 4
     
     st.markdown("""
     <div class='success-message'>
@@ -3636,18 +3750,10 @@ def mostrar_confirmacion_guardado():
     servicio_info = empleado_data.get('servicio_info', {})
     op_info = empleado_data.get('op_info', {})
     
-
-    
     # Calcular tiempo de la actividad anterior basado en cédula
     df = load_data()
     fecha_actual = obtener_fecha_colombia()
     hora_actual = obtener_hora_colombia_time()
-    
-    # Debug: mostrar información del DataFrame
-    print(f"DEBUG Confirmación: DataFrame shape: {df.shape}")
-    print(f"DEBUG Confirmación: Columnas disponibles: {df.columns.tolist()}")
-    print(f"DEBUG Confirmación: Buscando cédula: {empleado_data['cedula']}")
-    print(f"DEBUG Confirmación: Fecha actual: {fecha_actual}")
     
     ultimo_registro = obtener_ultimo_registro_por_cedula(empleado_data['cedula'], fecha_actual, df)
     
@@ -3660,7 +3766,7 @@ def mostrar_confirmacion_guardado():
     
     # Calcular los valores para mostrar en la confirmación
     orden_completa = op_info.get('orden', '')
-    orden_mostrar = orden_completa if orden_completa else 'N/A'  # La orden es el OP tal como está
+    orden_mostrar = orden_completa if orden_completa else 'N/A'
     
     # El item es el número después del último guión o viene de la OP
     item_desde_op = op_info.get('item', '')
@@ -3672,10 +3778,8 @@ def mostrar_confirmacion_guardado():
     else:
         item_mostrar = "1"
     
-
     # Mostrar información de la OP y tiempo
     if ultimo_registro is not None:
-        # Formatear el tiempo de manera más legible
         horas = int(tiempo_actividad_anterior)
         minutos = int((tiempo_actividad_anterior - horas) * 60)
         if horas > 0:
@@ -3685,25 +3789,6 @@ def mostrar_confirmacion_guardado():
     else:
         tiempo_texto = "Primera actividad del día"
     
-    # Debug temporal: mostrar información en la interfaz
-    with st.expander("🔍 Debug - ¿Por qué aparece 'Primer registro del día'?"):
-        st.write(f"**DataFrame shape:** {df.shape}")
-        st.write(f"**Columnas disponibles:** {df.columns.tolist()}")
-        st.write(f"**Cédula buscada:** {empleado_data['cedula']}")
-        st.write(f"**Fecha actual:** {fecha_actual}")
-        st.write(f"**Último registro encontrado:** {ultimo_registro is not None}")
-        
-        if not df.empty:
-            st.write("**Primeros registros del DataFrame:**")
-            st.dataframe(df.head())
-            
-            if 'cedula' in df.columns:
-                st.write(f"**Cédulas únicas en datos:** {df['cedula'].unique()}")
-            if 'fecha' in df.columns:
-                st.write(f"**Fechas únicas en datos:** {df['fecha'].unique()}")
-        else:
-            st.write("**El DataFrame está vacío**")
-    
     st.markdown(f"""
     <div class='info-message'>
         <p><strong>📋 Orden de Producción:</strong> {orden_mostrar}</p>
@@ -3711,43 +3796,115 @@ def mostrar_confirmacion_guardado():
         <p><strong>📦 Referencia:</strong> {op_info.get('referencia', 'N/A')}</p>
         <p><strong>🔢 Item:</strong> {item_mostrar}</p>
         <p><strong>⏰ Tiempo de la Actividad Completada:</strong> {tiempo_texto}</p>
-        <p><strong> Fecha:</strong> {obtener_hora_colombia().strftime('%d/%m/%Y %H:%M:%S')}</p>
+        <p><strong>📅 Fecha:</strong> {obtener_hora_colombia().strftime('%d/%m/%Y %H:%M:%S')}</p>
     </div>
     """, unsafe_allow_html=True)
     
-    col1, col2, col3 = st.columns(3)
+    # ============================================
+    # CONTEO REGRESIVO AUTOMÁTICO
+    # ============================================
+    
+    # Placeholder para el contador
+    contador_placeholder = st.empty()
+    
+    # Mostrar el contador inicial
+    with contador_placeholder.container():
+        st.markdown(f"""
+        <div style='background: linear-gradient(135deg, #FFD700 0%, #FFA500 100%);
+                    padding: 30px 40px;
+                    border-radius: 15px;
+                    border: 3px solid #FF8C00;
+                    margin: 20px 0;
+                    text-align: center;
+                    box-shadow: 0 8px 25px rgba(255, 165, 0, 0.4);'>
+            <h3 style='color: white; margin: 0 0 15px 0; font-size: 24px;'>⏳ Guardando automáticamente en...</h3>
+            <div style='font-size: 72px; font-weight: 900; color: white; text-shadow: 2px 2px 4px rgba(0,0,0,0.3);'>
+                {st.session_state.contador_guardado}
+            </div>
+            <p style='color: white; margin: 15px 0 0 0; font-size: 16px;'>El registro se guardará automáticamente</p>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    # Lógica de conteo regresivo
+    if st.session_state.contador_guardado > 0:
+        import time
+        time.sleep(1)  # Esperar 1 segundo
+        st.session_state.contador_guardado -= 1
+        st.rerun()  # Actualizar la pantalla
+    
+    # Cuando el contador llega a 0, guardar automáticamente
+    elif st.session_state.contador_guardado == 0:
+        print("✅ [GUARDAR AUTOMÁTICO] Iniciando guardado de registro")
+        
+        # Limpiar la pantalla del contador
+        contador_placeholder.empty()
+        
+        # Guardar el registro
+        guardar_registro_completo(empleado_data)
+        
+        # Mostrar confirmación de guardado
+        st.success("✅ ¡Registro guardado exitosamente!")
+        st.balloons()
+        
+        import time
+        time.sleep(2)
+        
+        # Resetear estados y volver al inicio
+        st.session_state.step = 1
+        st.session_state.empleado_data = {}
+        st.session_state.contador_guardado = 4
+        st.rerun()
+    
+    # ============================================
+    # OPCIONES MANUALES (Modificar o Cancelar)
+    # ============================================
+    
+    st.markdown("""
+    <div style='background: linear-gradient(135deg, #E8F5E9 0%, #F1F8E9 100%);
+                padding: 20px 20px;
+                border-radius: 10px;
+                border-left: 5px solid #4CAF50;
+                margin: 20px 0;
+                text-align: center;'>
+        <h4 style='color: #2E7D32; margin: 0 0 10px 0;'>ℹ️ Opciones Disponibles</h4>
+        <p style='color: #2E7D32; margin: 0; font-size: 14px;'>Si deseas <strong>modificar</strong> o <strong>cancelar</strong>, usa los botones de abajo</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Botones para opciones manuales
+    col1, col2, col3 = st.columns([1, 1, 1])
     
     with col1:
-        if st.button("← Modificar", type="secondary"):
+        if st.button("← Modificar", type="secondary", key="btn_modificar_confirmacion", use_container_width=True):
             st.session_state.step = 3
+            st.session_state.contador_guardado = 4  # Reset contador
             st.rerun()
     
     with col2:
-        if st.button("🚫 Cancelar", type="secondary"):
-            # Limpiar datos y volver al inicio
+        if st.button("🚫 Cancelar", type="secondary", key="btn_cancelar_confirmacion", use_container_width=True):
             st.session_state.step = 1
             st.session_state.empleado_data = {}
+            st.session_state.contador_guardado = 4  # Reset contador
             st.rerun()
     
     with col3:
-        if st.button("💾 Guardar Registro", type="primary"):
-            # Guardar el registro completo
+        # Botón para guardar inmediatamente (opcional)
+        if st.button("⚡ Guardar Ahora", type="primary", key="btn_guardar_ahora", use_container_width=True):
+            print("✅ [GUARDAR MANUAL] Guardado inmediato solicitado")
+            contador_placeholder.empty()
+            
             guardar_registro_completo(empleado_data)
-            # Mostrar confirmación
             st.success("✅ ¡Registro guardado exitosamente!")
+            st.balloons()
             
-            # Esperar un momento para mostrar el mensaje
             import time
-            time.sleep(1)
+            time.sleep(2)
             
-            # Limpiar TODOS los datos de sesión para nuevo registro
             st.session_state.step = 1
             st.session_state.empleado_data = {}
-            if 'tiempo_calculado' in st.session_state:
-                del st.session_state.tiempo_calculado
-            
-            # Volver al paso 1 automáticamente
+            st.session_state.contador_guardado = 4
             st.rerun()
+
 
 def finalizar_actividad_actual(empleado, hora_finalizacion=None):
     """Finalizar la actividad actual de un empleado"""
