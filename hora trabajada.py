@@ -536,9 +536,7 @@ def esta_bloqueado():
     return st.session_state.login_attempts >= max_attempts
 
 # ============================================
-# SISTEMA DE ADECUACIÓN LOCATIVA
-# Lunes a Jueves: 4:20 PM - 5:00 PM (OP se registra a hora real, Adec. Locativa desde hora real hasta 4:30)
-# Viernes: 3:20 PM - 3:30 PM (OP se registra a hora real, Adec. Locativa desde hora real hasta 3:30)
+
 # ============================================
 
 def es_horario_adecuacion_locativa():
@@ -5652,3 +5650,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
