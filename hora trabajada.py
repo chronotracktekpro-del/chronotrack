@@ -4402,12 +4402,12 @@ def guardar_en_google_sheets_simple(registro):
             fecha_str,  # Fecha
             str(registro.get('cedula', '')),  # Cédula
             str(registro.get('empleado', '')),  # Nombre
-            str(registro.get('op', '')),  # Orden
+             str(registro.get('op', '')),  # Orden (como string, para evitar formato fecha)
             str(registro.get('nombre_cliente', '')),  # Cliente
             codigo_servicio,  # Código
             actividad_servicio,  # Actividad
             str(registro.get('descripcion_op', '')),  # Item
-            float(tiempo_horas_calculado) if tiempo_horas_calculado else 0,  # Tiempo [Hr] - como número para evitar apóstrofe
+            float(tiempo_horas_calculado) if tiempo_horas_calculado else 0,  # Tiempo [Hr]
             str(registro.get('op_info', {}).get('cantidades', registro.get('cantidades', ''))),  # Cantidades (de OPS)
             str(registro.get('descripcion_proceso', 'PRODUCCION')),  # Proceso
             str(registro.get('mes', '')),  # Mes
@@ -4416,9 +4416,8 @@ def guardar_en_google_sheets_simple(registro):
             str(registro.get('referencia', str(registro.get('codigo_producto', '')))),  # REFERENCIA
             str(registro.get('hora_exacta', '')),  # hora_exacta (última columna)
         ]
-        
-        # Agregar la fila (USER_ENTERED para que números se guarden como números)
-        worksheet.append_row(fila_datos, value_input_option='USER_ENTERED')
+        # Guardar usando value_input_option='RAW' para evitar interpretación de fecha
+        worksheet.append_row(fila_datos, value_input_option='RAW')
         return True
         
     except Exception as e:
@@ -4487,12 +4486,12 @@ def guardar_en_google_sheets(registro):
                 fecha_obj.strftime('%d/%m/%Y'),  # Fecha
                 str(registro.get('cedula', '')),  # Cédula (de Datos_colab por cedula)
                 str(registro.get('empleado', '')),  # Nombre (de Datos_colab por nombre)
-                str(registro.get('op', '')),  # Orden (de OPS por orden)
+                str(registro.get('op', '')),  # Orden (de OPS por orden, como string)
                 str(registro.get('nombre_cliente', '')),  # Cliente (de OPS por cliente)
                 str(servicio_info.get('numero', '')),  # Código (literal de Servicio)
                 str(servicio_info.get('nomservicio', '')),  # Actividad (literal de Servicio)
                 str(registro.get('op_info', {}).get('item', '')),  # Item (descripción de la OP)
-                float(tiempo_horas_calculado) if tiempo_horas_calculado else 0,  # Tiempo [Hr] - como número para evitar apóstrofe
+                float(tiempo_horas_calculado) if tiempo_horas_calculado else 0,  # Tiempo [Hr]
                 str(registro.get('op_info', {}).get('cantidades', registro.get('cantidades', ''))),  # Cantidades (de OPS)
                 'PRODUCCION',  # Proceso (sin acento para consistencia)
                 str(registro.get('mes', fecha_obj.strftime('%m'))),  # Mes
@@ -4501,9 +4500,8 @@ def guardar_en_google_sheets(registro):
                 str(registro.get('op_info', {}).get('referencia', '')),  # REFERENCIA (de OPS por referencia)
                 str(registro.get('hora_exacta', ''))  # hora_exacta (última columna)
             ]
-            
-            # Agregar la fila a la hoja existente (USER_ENTERED para que números se guarden como números)
-            worksheet.append_row(fila_registro, value_input_option='USER_ENTERED')
+            # Guardar usando value_input_option='RAW' para evitar interpretación de fecha
+            worksheet.append_row(fila_registro, value_input_option='RAW')
             
         except Exception as e:
             raise Exception(f"Error guardando en Google Sheets: {str(e)}")
@@ -5650,4 +5648,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
