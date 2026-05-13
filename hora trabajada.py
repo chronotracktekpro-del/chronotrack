@@ -791,6 +791,195 @@ def save_data(df):
     """Guardar datos en archivo CSV"""
     df.to_csv(DATA_FILE, index=False)
 
+
+def _normalizar_texto_columna(valor):
+    """Normalizar nombres y valores de columnas para comparaciones flexibles."""
+    return str(valor).strip().lower()
+
+
+def _convertir_a_fecha(valor):
+    """Convertir un valor de fecha a date, devolviendo None si no es válido."""
+    if valor is None or (isinstance(valor, float) and pd.isna(valor)):
+        return None
+
+    fecha = pd.to_datetime(valor, errors='coerce', dayfirst=True)
+    if pd.isna(fecha):
+        return None
+
+    return fecha.date()
+
+
+def _obtener_indice_columna(headers, nombres_posibles):
+    """Buscar el índice de una columna por cualquiera de sus nombres posibles."""
+    nombres_normalizados = {_normalizar_texto_columna(nombre) for nombre in nombres_posibles}
+
+    for indice, header in enumerate(headers):
+        if _normalizar_texto_columna(header) in nombres_normalizados:
+            return indice
+
+    return None
+
+
+def _agrupar_indices_contiguos(indices):
+    """Agrupar índices consecutivos en rangos para borrar filas de forma más eficiente."""
+    if not indices:
+        return []
+
+    rangos = []
+    inicio = fin = indices[0]
+
+    for indice in indices[1:]:
+        if indice == fin + 1:
+            fin = indice
+        else:
+            rangos.append((inicio, fin))
+            inicio = fin = indice
+
+    rangos.append((inicio, fin))
+    return rangos
+
+
+def _obtener_estado_op_desde_ops(orden_op):
+    """Obtener el estado de una OP desde la hoja OPS."""
+    orden_busqueda = str(orden_op).strip()
+    if not orden_busqueda:
+        return None
+
+    spreadsheet, mensaje = conectar_google_sheets()
+    if spreadsheet is None:
+        return None
+
+    try:
+        worksheet = spreadsheet.worksheet('OPS')
+        all_values = worksheet.get_all_values()
+
+        if len(all_values) < 2:
+            return None
+
+        headers = all_values[0]
+        rows = all_values[1:]
+        idx_orden = _obtener_indice_columna(headers, ['orden', 'op'])
+        idx_estado = _obtener_indice_columna(headers, ['estado'])
+
+        if idx_orden is None or idx_estado is None:
+            return None
+
+        for row in rows:
+            if len(row) <= idx_orden:
+                continue
+
+            orden_registro = str(row[idx_orden]).strip()
+            if orden_registro == orden_busqueda:
+                if len(row) > idx_estado:
+                    return str(row[idx_estado]).strip()
+                return None
+
+        return None
+    except Exception:
+        return None
+
+
+def depurar_registros_antiguos(meses=2):
+    """Eliminar registros de OP con antigüedad mayor a la indicada en meses.
+
+    La depuración se aplica tanto al CSV local como a la hoja de Google Sheets
+    configurada en el sistema.
+    """
+    resumen = {
+        'fecha_corte': None,
+        'csv_eliminados': 0,
+        'sheets_eliminados': 0,
+        'csv_mensaje': '',
+        'sheets_mensaje': ''
+    }
+
+    fecha_corte = (pd.Timestamp(obtener_fecha_colombia()) - pd.DateOffset(months=meses)).date()
+    resumen['fecha_corte'] = fecha_corte
+
+    if os.path.exists(DATA_FILE):
+        try:
+            df_raw = pd.read_csv(DATA_FILE)
+
+            if 'fecha' not in df_raw.columns:
+                resumen['csv_mensaje'] = 'El CSV local no tiene columna fecha'
+            else:
+                fecha_parseada = df_raw['fecha'].apply(_convertir_a_fecha)
+                mascara_fecha_antigua = fecha_parseada.notna() & (fecha_parseada < fecha_corte)
+
+                columna_op = None
+                for candidato in ['codigo_op', 'op', 'orden']:
+                    if candidato in df_raw.columns:
+                        columna_op = candidato
+                        break
+
+                if columna_op:
+                    mascara_op = df_raw[columna_op].fillna('').astype(str).str.strip().ne('')
+                    mascara_eliminar = mascara_fecha_antigua & mascara_op
+                else:
+                    mascara_eliminar = mascara_fecha_antigua
+
+                registros_eliminados = int(mascara_eliminar.sum())
+                if registros_eliminados:
+                    df_limpio = df_raw.loc[~mascara_eliminar].copy()
+                    df_limpio.to_csv(DATA_FILE, index=False)
+
+                resumen['csv_eliminados'] = registros_eliminados
+                resumen['csv_mensaje'] = f'CSV local depurado: {registros_eliminados} registro(s) eliminado(s)'
+        except Exception as e:
+            resumen['csv_mensaje'] = f'Error depurando CSV local: {e}'
+
+    spreadsheet, mensaje = conectar_google_sheets()
+    if spreadsheet is None:
+        resumen['sheets_mensaje'] = f'Google Sheets no disponible: {mensaje}'
+        return resumen
+
+    try:
+        config = load_config()
+        worksheet_name = config.get('google_sheets', {}).get('worksheet_registros', 'Registros')
+        worksheet = spreadsheet.worksheet(worksheet_name)
+
+        all_values = worksheet.get_all_values()
+        if len(all_values) < 2:
+            resumen['sheets_mensaje'] = 'La hoja de registros está vacía'
+            return resumen
+
+        headers = all_values[0]
+        rows = all_values[1:]
+        idx_fecha = _obtener_indice_columna(headers, ['fecha'])
+        idx_op = _obtener_indice_columna(headers, ['codigo_op', 'op', 'orden'])
+
+        if idx_fecha is None:
+            resumen['sheets_mensaje'] = 'No se encontró la columna fecha en Google Sheets'
+            return resumen
+
+        filas_a_eliminar = []
+        for numero_fila, row in enumerate(rows, start=2):
+            fecha_registro = _convertir_a_fecha(row[idx_fecha] if len(row) > idx_fecha else '')
+            if fecha_registro is None or fecha_registro >= fecha_corte:
+                continue
+
+            if idx_op is not None:
+                op_valor = str(row[idx_op]).strip() if len(row) > idx_op else ''
+                if not op_valor:
+                    continue
+
+                estado_op = _obtener_estado_op_desde_ops(op_valor)
+                if str(estado_op).strip().upper() != 'TERMINADA':
+                    continue
+
+            filas_a_eliminar.append(numero_fila)
+
+        if filas_a_eliminar:
+            for inicio, fin in reversed(_agrupar_indices_contiguos(sorted(filas_a_eliminar))):
+                worksheet.delete_rows(inicio, fin)
+
+        resumen['sheets_eliminados'] = len(filas_a_eliminar)
+        resumen['sheets_mensaje'] = f'Google Sheets depurado: {len(filas_a_eliminar)} registro(s) eliminado(s)'
+        return resumen
+    except Exception as e:
+        resumen['sheets_mensaje'] = f'Error depurando Google Sheets: {e}'
+        return resumen
+
 def calcular_descuento_breaks(hora_entrada, hora_salida):
     """
     Calcula el tiempo de descuento por desayuno y almuerzo según el rango trabajado.
@@ -5560,6 +5749,42 @@ def configurar_sistema():
         }
         save_config(config)
         st.success("Configuración guardada correctamente")
+
+    st.subheader("🧹 Mantenimiento de Datos")
+
+    with st.expander("Eliminar OPs antiguas", expanded=False):
+        st.warning("Esta acción eliminará los registros de OP con fecha anterior al corte seleccionado en el CSV local y en Google Sheets.")
+
+        meses_depurar = st.number_input(
+            "Eliminar registros anteriores a (meses):",
+            min_value=1,
+            max_value=24,
+            value=2,
+            step=1,
+            help="Por defecto elimina las OP con más de 2 meses de antigüedad"
+        )
+
+        confirmar_depuracion = st.checkbox(
+            "Confirmo que quiero eliminar los registros antiguos",
+            key="confirmar_depuracion_op"
+        )
+
+        if st.button("🗑️ Ejecutar depuración", type="primary", use_container_width=True):
+            if not confirmar_depuracion:
+                st.error("Debes confirmar la eliminación antes de ejecutar la depuración")
+            else:
+                with st.spinner("Depurando registros antiguos..."):
+                    resultado_depuracion = depurar_registros_antiguos(int(meses_depurar))
+
+                fecha_corte = resultado_depuracion.get('fecha_corte')
+                st.success(f"Depuración completada. Corte aplicado desde {fecha_corte}.")
+                st.write(resultado_depuracion.get('csv_mensaje', ''))
+                st.write(resultado_depuracion.get('sheets_mensaje', ''))
+                st.info(
+                    f"CSV eliminado(s): {resultado_depuracion.get('csv_eliminados', 0)} | "
+                    f"Sheets eliminado(s): {resultado_depuracion.get('sheets_eliminados', 0)}"
+                )
+                st.rerun()
     
     st.subheader("ℹ️ Información del Sistema")
     
