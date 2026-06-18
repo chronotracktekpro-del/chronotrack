@@ -13,6 +13,24 @@ from google.oauth2.service_account import Credentials
 COLOMBIA_UTC_OFFSET = timedelta(hours=-5)
 COLOMBIA_TZ = timezone(COLOMBIA_UTC_OFFSET)
 
+# Nombres ignorados en el panel de administración (exactos, sin distinción de mayúsculas)
+NOMBRES_IGNORADOS_ADMIN = [
+    'GALINDEZ JEFFERSON',
+    'GONZALEZ GONZALEZ MANUEL ALEJANDRO',
+    'SUAREZ MAYA JULIO CESAR',
+    'MARTINEZ JUAN DAVID',
+]
+
+def _filtrar_empleados_ignorados(df):
+    """Filtra registros de empleados ignorados en el panel de administración"""
+    if df.empty or 'empleado' not in df.columns:
+        return df
+    nombres_lower = {n.lower() for n in NOMBRES_IGNORADOS_ADMIN}
+    mask = df['empleado'].apply(
+        lambda x: str(x).strip().lower() in nombres_lower if pd.notna(x) else False
+    )
+    return df[~mask]
+
 def obtener_hora_colombia():
     """Obtener la hora actual en zona horaria de Colombia (UTC-5)"""
     return datetime.now(COLOMBIA_TZ)
@@ -780,7 +798,7 @@ def load_data():
             
             print(f"📊 [DATA CLEANING] Registros originales: {len(df)}, Registros válidos: {len(df_limpio)}")
             
-            return df_limpio[columnas_nuevas]  # Asegurar el orden correcto
+            return df_limpio  # Retornar todas las columnas disponibles
         except Exception as e:
             st.warning(f"Error cargando datos existentes: {e}")
             return pd.DataFrame(columns=columnas_nuevas)
@@ -4855,6 +4873,7 @@ def mostrar_dashboard():
     st.subheader("📊 Resumen de Hoy")
     
     df = load_data()
+    df = _filtrar_empleados_ignorados(df)
     fecha_hoy = obtener_fecha_colombia()
     registros_hoy = df[df['fecha'] == fecha_hoy]
     
@@ -5025,7 +5044,9 @@ def gestionar_empleados():
                 st.error("Por favor completa todos los campos")
     
     st.subheader("Lista de Empleados")
+    nombres_ignorados_lower = {n.lower() for n in NOMBRES_IGNORADOS_ADMIN}
     empleados = config.get('empleados', [])
+    empleados = [e for e in empleados if e.strip().lower() not in nombres_ignorados_lower]
     codigos = config.get('codigos_barras', {})
     
     if empleados:
@@ -5056,6 +5077,7 @@ def ver_registros():
     st.subheader("📋 Registros de Horas")
     
     df = load_data()
+    df = _filtrar_empleados_ignorados(df)
     
     if df.empty:
         st.info("No hay registros disponibles")
@@ -5116,6 +5138,7 @@ def obtener_horas_por_op(df_filtrado=None, fecha_inicio=None, fecha_fin=None):
     """Obtener horas trabajadas agrupadas por Orden de Producción"""
     if df_filtrado is None:
         df = load_data()
+        df = _filtrar_empleados_ignorados(df)
         if fecha_inicio and fecha_fin:
             df = df[(df['fecha'] >= fecha_inicio) & (df['fecha'] <= fecha_fin)]
     else:
@@ -5169,6 +5192,7 @@ def obtener_horas_por_op(df_filtrado=None, fecha_inicio=None, fecha_fin=None):
 def obtener_detalle_op(op_seleccionada, fecha_inicio=None, fecha_fin=None):
     """Obtener detalle de horas por empleado para una OP específica"""
     df = load_data()
+    df = _filtrar_empleados_ignorados(df)
     
     if df.empty:
         return pd.DataFrame()
@@ -5248,7 +5272,7 @@ def mostrar_reportes_op():
             st.write(f"**Total registros en período:** {len(df_periodo)}")
             
             if not df_periodo.empty:
-                ops_disponibles = df_periodo['op'].value_counts()
+                ops_disponibles = df_periodo['codigo_op'].value_counts()
                 st.write("**OPs en los datos:**")
                 st.dataframe(ops_disponibles)
                 
