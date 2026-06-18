@@ -2255,12 +2255,13 @@ def obtener_nombres_empleados_registros():
         if idx_nombre is None:
             return []
         
-        # Obtener nombres únicos
+        # Obtener nombres únicos, excluyendo los ignorados
+        nombres_ignorados_lower = {n.lower() for n in NOMBRES_IGNORADOS_ADMIN}
         nombres = set()
         for row in rows_reg:
             if len(row) > idx_nombre:
                 nombre = str(row[idx_nombre]).strip()
-                if nombre:
+                if nombre and nombre.lower() not in nombres_ignorados_lower:
                     nombres.add(nombre)
         
         return sorted(list(nombres))
