@@ -4,6 +4,7 @@ import pandas as pd
 from datetime import datetime, time, date, timedelta, timezone
 import calendar
 import os
+import numpy
 import json
 import base64
 import gspread
