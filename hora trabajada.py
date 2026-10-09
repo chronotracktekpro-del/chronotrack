@@ -2114,6 +2114,37 @@ def registrar_entrada_salida(empleado, codigo_barras, servicio_info=None):
     """Función de compatibilidad - redirige a la nueva función de actividades continuas"""
     return registrar_actividad_continua(empleado, codigo_barras, servicio_info)
 
+
+def _normalizar_nombre_columna(valor):
+    """Normalizar nombres de columnas para comparación insensible a mayúsculas, espacios y signos."""
+    if valor is None:
+        return ''
+    return ''.join(ch for ch in str(valor).strip().lower() if ch.isalnum())
+
+
+def _parsear_hora_decimal(valor):
+    """Parsear valores numéricos con separadores de miles y decimales de Excel/CSV."""
+    if valor is None:
+        return 0.0
+    texto = str(valor).strip()
+    if not texto or texto.lower() in {'', 'nan', 'none', 'n/a'}:
+        return 0.0
+
+    texto = texto.replace(' ', '')
+    if ',' in texto and '.' in texto:
+        if texto.rfind('.') < texto.rfind(','):
+            texto = texto.replace('.', '').replace(',', '.')
+        else:
+            texto = texto.replace(',', '')
+    elif ',' in texto:
+        texto = texto.replace(',', '.')
+
+    try:
+        return float(texto)
+    except ValueError:
+        return 0.0
+
+
 def obtener_lista_ops():
     """Obtener lista de todas las OPs desde el sheet OPS"""
     try:
@@ -2147,38 +2178,51 @@ def obtener_lista_ops():
         lista_ops = []
         for record in records:
             orden = str(record.get('orden', '')).strip()
-            if orden:  # Solo agregar si tiene orden
+            if orden:
                 cliente = str(record.get('cliente', '')).strip()
                 referencia = str(record.get('referencia', '')).strip()
                 item = str(record.get('item', '')).strip()
                 cantidades = str(record.get('Cantidades', '')).strip()
-                estado = str(record.get('estado', '')).strip()  # Estado de planos
+                estado = str(record.get('estado', '')).strip()
                 
-                # Filtrar OPs con estado "Terminado" - no mostrar en la lista
                 if estado.lower() == 'terminado':
-                    continue  # Saltar esta OP, no agregarla a la lista
-                
-                # Buscar tiemposprome (insensible a mayúsculas/minúsculas)
-                tiemposprome = ''
-                for key in record.keys():
-                    if key.lower() == 'tiemposprome':
-                        tiemposprome = str(record.get(key, '')).strip()
-                        break
-                
-                # Parsear tiemposprome (formato: "10,35,32,54")
+                    continue
+
                 tiempos_estimados = {'corte': 0, 'mecanizado': 0, 'doblado': 0, 'ensamble': 0}
-                if tiemposprome:
-                    try:
-                        partes = tiemposprome.split(',')
-                        if len(partes) >= 4:
-                            tiempos_estimados['corte'] = float(partes[0].strip()) if partes[0].strip() else 0
-                            tiempos_estimados['mecanizado'] = float(partes[1].strip()) if partes[1].strip() else 0
-                            tiempos_estimados['doblado'] = float(partes[2].strip()) if partes[2].strip() else 0
-                            tiempos_estimados['ensamble'] = float(partes[3].strip()) if partes[3].strip() else 0
-                    except:
-                        pass
-                
-                # Crear texto para mostrar en el desplegable
+                tiempos_raw = {}
+                aliases = {
+                    'mecanizado': ['maquinadomax'],
+                    'ensamble': ['ensamblemax'],
+                    'doblado': ['otrosprocesosmax'],
+                    'corte': ['otrosprocesosmax']
+                }
+
+                for etapa, nombres in aliases.items():
+                    alias_norm = {_normalizar_nombre_columna(nombre) for nombre in nombres}
+                    for key, value in record.items():
+                        if _normalizar_nombre_columna(key) in alias_norm:
+                            tiempos_estimados[etapa] = _parsear_hora_decimal(value)
+                            tiempos_raw[etapa] = str(value).strip()
+                            break
+
+                # En OPS, otrosprocesosmax aplica a doblado y corte como un mismo límite
+                if tiempos_estimados['doblado'] > 0 and tiempos_estimados['corte'] == 0:
+                    tiempos_estimados['corte'] = tiempos_estimados['doblado']
+                if tiempos_estimados['corte'] > 0 and tiempos_estimados['doblado'] == 0:
+                    tiempos_estimados['doblado'] = tiempos_estimados['corte']
+
+                if all(v == 0 for v in tiempos_estimados.values()):
+                    total_equipo = _parsear_hora_decimal(record.get('totalhorasequiposmax', 0))
+                    if total_equipo > 0:
+                        tiempos_estimados['mecanizado'] = total_equipo / 2
+                        tiempos_estimados['doblado'] = total_equipo / 4
+                        tiempos_estimados['ensamble'] = total_equipo / 4
+                        tiempos_raw = {
+                            'mecanizado': str(record.get('totalhorasequiposmax', '')),
+                            'doblado': str(record.get('totalhorasequiposmax', '')),
+                            'ensamble': str(record.get('totalhorasequiposmax', ''))
+                        }
+
                 texto_display = f"{orden} - {cliente} - {referencia}"
                 
                 lista_ops.append({
@@ -2187,9 +2231,10 @@ def obtener_lista_ops():
                     'referencia': referencia,
                     'item': item,
                     'cantidades': cantidades,
-                    'estado': estado,  # Estado de planos desde OPS
-                    'tiempos_estimados': tiempos_estimados,  # Tiempos estimados parseados
-                    'tiemposprome_raw': tiemposprome,  # Valor crudo para debug
+                    'estado': estado,
+                    'tiempos_estimados': tiempos_estimados,
+                    'tiemposprome_raw': tiempos_raw,
+                    'totalhorasequiposmax': _parsear_hora_decimal(record.get('totalhorasequiposmax', 0)),
                     'display': texto_display
                 })
         
@@ -2966,9 +3011,9 @@ def pantalla_avance_proyecto():
             </div>
             """, unsafe_allow_html=True)
             
-            # DEBUG: Mostrar valor de tiemposprome
+            # DEBUG: Mostrar valores de los tiempos máximos de la OP
             with st.expander("🔧 Debug - Tiempos Estimados"):
-                st.write(f"**Valor crudo de tiemposprome:** `{op_seleccionada.get('tiemposprome_raw', 'NO ENCONTRADO')}`")
+                st.write(f"**Valores crudos por etapa:** `{op_seleccionada.get('tiemposprome_raw', 'NO ENCONTRADO')}`")
                 st.write(f"**Tiempos parseados:** {op_seleccionada.get('tiempos_estimados', {})}")
             
             # Guardar en session_state para uso futuro
@@ -3049,15 +3094,60 @@ def pantalla_avance_proyecto():
             # ============================================
             tiempos_estimados = op_seleccionada.get('tiempos_estimados', {'corte': 0, 'mecanizado': 0, 'doblado': 0, 'ensamble': 0})
             horas_trabajadas = obtener_horas_trabajadas_por_actividad(op_seleccionada['orden'])
+            total_horas_equipo = (
+                horas_trabajadas['corte'] +
+                horas_trabajadas['mecanizado'] +
+                horas_trabajadas['doblado'] +
+                horas_trabajadas['ensamble']
+            )
+            total_horas_max = _parsear_hora_decimal(op_seleccionada.get('totalhorasequiposmax', 0))
+
+            if total_horas_max <= 0:
+                total_horas_max = sum(tiempos_estimados.values())
             
             # Calcular progresos
             progreso_corte = calcular_progreso(horas_trabajadas['corte'], tiempos_estimados['corte'])
             progreso_mecanizado = calcular_progreso(horas_trabajadas['mecanizado'], tiempos_estimados['mecanizado'])
             progreso_doblado = calcular_progreso(horas_trabajadas['doblado'], tiempos_estimados['doblado'])
             progreso_ensamble = calcular_progreso(horas_trabajadas['ensamble'], tiempos_estimados['ensamble'])
+            progreso_total_equipo = calcular_progreso(total_horas_equipo, total_horas_max)
+
+            # ============================================
+            # 2. TOTAL AVANCE EQUIPO - Barra global
+            # ============================================
+            estado_total_equipo = obtener_color_estado_barra(progreso_total_equipo)
+            progreso_total_equipo_visual = min(progreso_total_equipo, 100)
+            horas_excedidas_total_equipo = total_horas_equipo - total_horas_max if progreso_total_equipo > 100 else 0
+
+            st.markdown(f"""
+            <div style='
+                background: #f8f9fa;
+                padding: 15px 20px;
+                border-radius: 10px;
+                border-left: 4px solid {estado_total_equipo['color']};
+                margin: 10px 0;
+            '>
+                <h4 style='color: #495057; margin: 0;'>TOTAL AVANCE EQUIPO</h4>
+            </div>
+            """, unsafe_allow_html=True)
+
+            texto_exceso_total_equipo = f" - ⚠️ Se ha excedido {horas_excedidas_total_equipo:.2f} hrs" if progreso_total_equipo > 100 else ""
+            st.markdown(f"""
+            <div style='display: flex; justify-content: space-between; margin: 5px 0; font-size: 14px;'>
+                <span>📊 Trabajadas: <strong>{total_horas_equipo:.2f} hrs</strong></span>
+                <span>🎯 Estimadas: <strong>{total_horas_max:.0f} hrs</strong></span>
+            </div>
+            <div style='background: #e9ecef; border-radius: 10px; height: 30px; margin: 5px 0 5px 0; overflow: hidden; position: relative;'>
+                <div style='background: linear-gradient(90deg, {estado_total_equipo['color']}, {estado_total_equipo['color_claro']}); width: {progreso_total_equipo_visual:.1f}%; height: 100%; border-radius: 10px; transition: width 0.3s ease;'></div>
+                <span style='position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: {'white' if progreso_total_equipo_visual > 40 else '#212529'}; font-weight: bold; font-size: 14px;'>{progreso_total_equipo:.1f}%</span>
+            </div>
+            <div style='text-align: center; margin-bottom: 20px;'>
+                <span style='color: {estado_total_equipo['color_texto']}; font-weight: bold; font-size: 14px;'>{estado_total_equipo['estado']}{texto_exceso_total_equipo}</span>
+            </div>
+            """, unsafe_allow_html=True)
             
             # ============================================
-            # 2. CORTE - Barra de progreso
+            # 3. CORTE - Barra de progreso
             # ============================================
             estado_corte = obtener_color_estado_barra(progreso_corte)
             progreso_corte_visual = min(progreso_corte, 100)  # Para la barra visual, máximo 100%
@@ -3091,7 +3181,7 @@ def pantalla_avance_proyecto():
             """, unsafe_allow_html=True)
             
             # ============================================
-            # 3. MECANIZADO - Barra de progreso
+            # 4. MECANIZADO - Barra de progreso
             # ============================================
             estado_mecanizado = obtener_color_estado_barra(progreso_mecanizado)
             progreso_mecanizado_visual = min(progreso_mecanizado, 100)
@@ -3125,7 +3215,7 @@ def pantalla_avance_proyecto():
             """, unsafe_allow_html=True)
             
             # ============================================
-            # 4. DOBLADO - Barra de progreso
+            # 5. DOBLADO - Barra de progreso
             # ============================================
             estado_doblado = obtener_color_estado_barra(progreso_doblado)
             progreso_doblado_visual = min(progreso_doblado, 100)
@@ -3159,7 +3249,7 @@ def pantalla_avance_proyecto():
             """, unsafe_allow_html=True)
             
             # ============================================
-            # 5. ENSAMBLE - Barra de progreso
+            # 6. ENSAMBLE - Barra de progreso
             # ============================================
             estado_ensamble = obtener_color_estado_barra(progreso_ensamble)
             progreso_ensamble_visual = min(progreso_ensamble, 100)
