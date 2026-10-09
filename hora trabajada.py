@@ -4,7 +4,6 @@ import pandas as pd
 from datetime import datetime, time, date, timedelta, timezone
 import calendar
 import os
-import numpy
 import json
 import base64
 import gspread
@@ -776,7 +775,8 @@ def load_data():
     if os.path.exists(DATA_FILE):
         try:
             df = pd.read_csv(DATA_FILE)
-            df['fecha'] = pd.to_datetime(df['fecha']).dt.date
+            if 'fecha' in df.columns:
+                df['fecha'] = df['fecha'].apply(_convertir_a_fecha)
             
             # LIMPIAR REGISTROS PROBLEMÁTICOS
             # Filtrar registros que tengan al menos cedula y hora_entrada válidos
@@ -807,8 +807,13 @@ def load_data():
     return pd.DataFrame(columns=columnas_nuevas)
 
 def save_data(df):
-    """Guardar datos en archivo CSV"""
-    df.to_csv(DATA_FILE, index=False)
+    """Guardar datos en archivo CSV con formato de fecha Excel compatible dd/mm/yyyy."""
+    df_copia = df.copy()
+    if 'fecha' in df_copia.columns:
+        df_copia['fecha'] = df_copia['fecha'].apply(
+            lambda valor: _convertir_a_fecha(valor).strftime('%d/%m/%Y') if _convertir_a_fecha(valor) else ''
+        )
+    df_copia.to_csv(DATA_FILE, index=False)
 
 
 def _normalizar_texto_columna(valor):
@@ -818,14 +823,80 @@ def _normalizar_texto_columna(valor):
 
 def _convertir_a_fecha(valor):
     """Convertir un valor de fecha a date, devolviendo None si no es válido."""
-    if valor is None or (isinstance(valor, float) and pd.isna(valor)):
+    if valor is None:
         return None
 
-    fecha = pd.to_datetime(valor, errors='coerce', dayfirst=True)
+    if isinstance(valor, datetime):
+        return valor.date()
+    if isinstance(valor, date):
+        return valor
+    if isinstance(valor, (float, int)) and pd.isna(valor):
+        return None
+
+    texto = str(valor).strip()
+    if not texto:
+        return None
+
+    texto = texto.replace('’', "'").replace('“', '"').replace('”', '"')
+    texto = texto.strip("'\"")
+    if not texto:
+        return None
+
+    for formato in (
+        '%d/%m/%Y %H:%M:%S', '%d/%m/%Y %H:%M', '%d/%m/%Y',
+        '%Y-%m-%d %H:%M:%S', '%Y-%m-%d %H:%M', '%Y-%m-%d',
+        '%d-%m-%Y', '%m/%d/%Y', '%Y/%m/%d'
+    ):
+        try:
+            return datetime.strptime(texto, formato).date()
+        except ValueError:
+            continue
+
+    fecha = pd.to_datetime(texto, errors='coerce', dayfirst=True)
     if pd.isna(fecha):
         return None
 
     return fecha.date()
+
+
+def obtener_horas_diarias_y_exceso(cedula, fecha_actual):
+    """Calcular horas trabajadas del día y el excedente para Adecuación Locativa."""
+    try:
+        cedula_str = str(cedula).strip()
+        df = load_data()
+        if df.empty:
+            return {'total_horas': 0.0, 'horas_normales': 0.0, 'horas_exceso': 0.0, 'tiene_exceso': False}
+
+        registros = df[df['cedula'].astype(str).str.strip() == cedula_str].copy()
+        if registros.empty:
+            return {'total_horas': 0.0, 'horas_normales': 0.0, 'horas_exceso': 0.0, 'tiene_exceso': False}
+
+        registros['fecha_normalizada'] = registros['fecha'].apply(_convertir_a_fecha)
+        registros = registros[registros['fecha_normalizada'] == _convertir_a_fecha(fecha_actual)].copy()
+
+        if registros.empty:
+            return {'total_horas': 0.0, 'horas_normales': 0.0, 'horas_exceso': 0.0, 'tiene_exceso': False}
+
+        total_horas = 0.0
+        for valor in registros.get('horas_trabajadas', []):
+            try:
+                total_horas += float(valor)
+            except (TypeError, ValueError):
+                continue
+
+        horario = obtener_horario_laboral(fecha_actual)
+        horas_normales = float(horario.get('horas_normales', 0)) if horario else 0.0
+        horas_exceso = max(0.0, total_horas - horas_normales)
+
+        return {
+            'total_horas': round(total_horas, 3),
+            'horas_normales': round(horas_normales, 3),
+            'horas_exceso': round(horas_exceso, 3),
+            'tiene_exceso': horas_exceso > 0
+        }
+    except Exception as e:
+        print(f"Error calculando horas diarias y exceso: {e}")
+        return {'total_horas': 0.0, 'horas_normales': 0.0, 'horas_exceso': 0.0, 'tiene_exceso': False}
 
 
 def _obtener_indice_columna(headers, nombres_posibles):
@@ -1511,21 +1582,24 @@ def verificar_registros_del_dia_en_sheets(cedula, fecha_actual):
         
         # Formatear fecha actual para comparación
         if hasattr(fecha_actual, 'strftime'):
-            fecha_str = fecha_actual.strftime('%d/%m/%Y')
+            fecha_obj = fecha_actual.date() if hasattr(fecha_actual, 'date') else fecha_actual
+            fecha_str = fecha_obj.strftime('%d/%m/%Y')
         else:
-            fecha_str = str(fecha_actual)
-        
+            fecha_obj = _convertir_a_fecha(fecha_actual)
+            fecha_str = fecha_obj.strftime('%d/%m/%Y') if fecha_obj else str(fecha_actual)
+
         cedula_str = str(cedula).strip()
         registros_del_dia = []
-        
+
         # Buscar todos los registros de esta cédula en esta fecha
         for row in rows:
             if len(row) > max(cedula_idx, fecha_idx):
                 cedula_en_fila = str(row[cedula_idx]).strip()
                 fecha_en_fila = str(row[fecha_idx]).strip()
-                
-                # Comparar cédula y fecha
-                if cedula_en_fila == cedula_str and fecha_en_fila == fecha_str:
+                fecha_normalizada = _convertir_a_fecha(fecha_en_fila)
+
+                # Comparar cédula y fecha, normalizando formatos como "'24/08/2026"
+                if cedula_en_fila == cedula_str and fecha_normalizada == _convertir_a_fecha(fecha_str):
                     registro_info = {
                         'fila': row,
                         'hora_exacta': row[hora_exacta_idx].strip() if hora_exacta_idx and len(row) > hora_exacta_idx else None
@@ -4353,6 +4427,66 @@ Se crearán **DOS registros**:
     # PASO 5: Guardar en archivo local INMEDIATAMENTE
     df = pd.concat([df, pd.DataFrame([nuevo_registro])], ignore_index=True)
     save_data(df)
+
+    # Validar exceso diario y registrarlo como Adecuación Locativa si aplica
+    resumen_diario = obtener_horas_diarias_y_exceso(cedula, fecha_actual)
+    if resumen_diario['tiene_exceso']:
+        servicio_adecuacion = obtener_servicio_adecuacion_locativa()
+        exceso_horas = resumen_diario['horas_exceso']
+        registro_adecuacion_local = {
+            'fecha': fecha_actual,
+            'cedula': cedula,
+            'empleado': empleado,
+            'hora_entrada': hora_actual.strftime('%H:%M:%S') if hasattr(hora_actual, 'strftime') else str(hora_actual),
+            'codigo_actividad': servicio_adecuacion['numero'],
+            'op': '0000',
+            'codigo_producto': 'N/A',
+            'cantidades': 'N/A',
+            'nombre_cliente': 'N/A',
+            'descripcion_op': 'ADECUACIÓN LOCATIVA',
+            'descripcion_proceso': 'PRODUCCIÓN',
+            'hora_salida': hora_actual.strftime('%H:%M:%S') if hasattr(hora_actual, 'strftime') else str(hora_actual),
+            'horas_trabajadas': exceso_horas,
+            'hora_exacta': hora_actual.strftime('%H:%M:%S') if hasattr(hora_actual, 'strftime') else str(hora_actual),
+            'mes': fecha_actual.strftime('%m'),
+            'año': fecha_actual.strftime('%Y'),
+            'semana': str(fecha_actual.isocalendar()[1]),
+            'referencia': 'N/A',
+            'servicio': f"{servicio_adecuacion['numero']} - {servicio_adecuacion['nomservicio']}"
+        }
+        df_adecuacion = load_data()
+        df_adecuacion = pd.concat([df_adecuacion, pd.DataFrame([registro_adecuacion_local])], ignore_index=True)
+        save_data(df_adecuacion)
+
+        config = load_config()
+        if config.get('google_sheets', {}).get('enabled', False):
+            try:
+                registro_adecuacion_para_sheets = {
+                    'fecha': fecha_actual,
+                    'cedula': cedula,
+                    'empleado': empleado,
+                    'codigo_actividad': servicio_adecuacion['numero'],
+                    'op': '0000',
+                    'codigo_producto': 'N/A',
+                    'cantidades': 'N/A',
+                    'nombre_cliente': 'N/A',
+                    'descripcion_op': 'ADECUACIÓN LOCATIVA',
+                    'descripcion_proceso': 'PRODUCCIÓN',
+                    'hora_entrada': hora_actual.strftime('%H:%M:%S') if hasattr(hora_actual, 'strftime') else str(hora_actual),
+                    'hora_salida': hora_actual.strftime('%H:%M:%S') if hasattr(hora_actual, 'strftime') else str(hora_actual),
+                    'tiempo_horas': exceso_horas,
+                    'hora_exacta': hora_actual.strftime('%H:%M:%S') if hasattr(hora_actual, 'strftime') else str(hora_actual),
+                    'mes': fecha_actual.strftime('%m'),
+                    'año': fecha_actual.strftime('%Y'),
+                    'semana': str(fecha_actual.isocalendar()[1]),
+                    'referencia': 'N/A',
+                    'servicio': f"{servicio_adecuacion['numero']} - {servicio_adecuacion['nomservicio']}"
+                }
+                guardar_en_google_sheets_simple(registro_adecuacion_para_sheets)
+            except Exception as e:
+                st.warning(f"No se pudo guardar exceso como Adecuación Locativa en Google Sheets: {e}")
+
+        st.info(f"🏠 Excedente diario registrado como Adecuación Locativa: {exceso_horas:.3f} horas")
     
     # PASO 6: Guardar registro en Google Sheets
     config = load_config()
